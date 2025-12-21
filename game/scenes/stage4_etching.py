@@ -24,9 +24,9 @@ class EtchingStage(Scene):
     WAFER_RADIUS = 150            # 晶圓半徑 (像素)
     GRID_SIZE = 40                # 圖案網格解析度
 
-    # 游標控制參數（與 Stage 2 一致，使用加速度控制）
-    ACCEL_DEADZONE = 0.1          # 死區加速度（g）
-    ACCEL_MAX = 1.0               # 最大有效加速度（g）
+    # 陀螺儀參數（與 Stage 2 一致）
+    GYRO_DEADZONE = 300           # 死區（濾除平放時的雜訊）
+    GYRO_MAX = 2000               # 最大有效值
     CURSOR_MAX_SPEED = 300.0      # 最大移動速度（像素/秒）
     CURSOR_MIN_SPEED = 50.0       # 最小移動速度（像素/秒）
 
@@ -240,30 +240,31 @@ class EtchingStage(Scene):
         self.switch_to("result")
 
     def _get_cursor_velocity(self) -> tuple:
-        """取得游標速度（根據加速度，與 Stage 2 一致）"""
+        """取得游標速度（根據陀螺儀，與 Stage 2 一致）"""
         if self.game.sensor and self.game.sensor.is_connected:
             data = self.game.sensor.get_imu_data()
-            # 轉換為 g 值 (靈敏度: 2048 LSB/g)
-            ax = data.ax / 2048.0
-            ay = data.ay / 2048.0
+            # 使用校正後的陀螺儀資料
+            gx = data.gx  # 左右傾斜
+            gy = data.gy  # 前後傾斜
         else:
-            ax, ay = 0.0, 0.0
+            gx, gy = 0.0, 0.0
 
-        def apply_deadzone_and_scale(accel: float) -> float:
-            if abs(accel) < self.ACCEL_DEADZONE:
+        def apply_deadzone_and_scale(gyro: float) -> float:
+            if abs(gyro) < self.GYRO_DEADZONE:
                 return 0.0
 
-            sign = 1 if accel > 0 else -1
-            effective = abs(accel) - self.ACCEL_DEADZONE
-            max_effective = self.ACCEL_MAX - self.ACCEL_DEADZONE
+            sign = 1 if gyro > 0 else -1
+            effective = abs(gyro) - self.GYRO_DEADZONE
+            max_effective = self.GYRO_MAX - self.GYRO_DEADZONE
             effective = min(effective, max_effective)
             normalized = effective / max_effective
             speed = self.CURSOR_MIN_SPEED + normalized * (self.CURSOR_MAX_SPEED - self.CURSOR_MIN_SPEED)
             return sign * speed
 
-        # ay 控制左右傾斜，ax 控制前後傾斜
-        vx = apply_deadzone_and_scale(ay)
-        vy = apply_deadzone_and_scale(ax)
+        # gx 控制左右傾斜（取負號：左傾gx>0 → vx<0向左）
+        vx = -apply_deadzone_and_scale(gx)
+        # gy 控制前後傾斜
+        vy = apply_deadzone_and_scale(gy)
 
         return (vx, vy)
 

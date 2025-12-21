@@ -160,9 +160,9 @@ class ExposureStage(Scene):
     def _get_stability(self) -> float:
         """取得穩定度（使用3軸加速度計算整體穩定性）"""
         if self.game.sensor and self.game.sensor.is_connected:
-            data = self.game.sensor.get_imu_data()
+            # 使用原始資料（包含重力分量，靜止時向量大小約 2048）
+            data = self.game.sensor.get_raw_imu_data()
             # 計算3軸加速度向量的大小 (靈敏度: 2048 LSB/g，靜止時約為 2048)
-            # 注意：靜止時 az 約為 2048 (1g)，ax/ay 約為 0
             total_accel = (data.ax ** 2 + data.ay ** 2 + data.az ** 2) ** 0.5
             # 靜止時 total_accel 約為 2048 (1g)
             # 計算偏離靜止狀態的程度
