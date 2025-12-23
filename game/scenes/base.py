@@ -8,7 +8,9 @@ from abc import ABC, abstractmethod
 from ..utils.drawing import create_gradient_surface
 from ..config import (
     SCREEN_WIDTH, SCREEN_HEIGHT,
-    BG_DARK, BG_MEDIUM, WHITE, TEXT_MUTED
+    BG_DARK, BG_MEDIUM, BG_SURFACE, WHITE, GRAY,
+    TEXT_PRIMARY, TEXT_MUTED, TEXT_SECONDARY,
+    PRIMARY_LIGHT, SECONDARY_COLOR, ACCENT_COLOR
 )
 
 
@@ -448,3 +450,104 @@ class ProgressBar:
         shine_surf.blit(clip, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
 
         screen.blit(shine_surf, self.rect.topleft)
+
+
+class ShapeCard:
+    """圖形選擇卡片 UI 組件"""
+
+    def __init__(
+        self,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        shape_type,
+        metadata: dict,
+        thumbnail_surface: pygame.Surface,
+    ):
+        """
+        初始化圖形選擇卡片
+
+        Args:
+            x, y: 位置
+            width, height: 尺寸
+            shape_type: 圖形類型枚舉值
+            metadata: 圖形元資料 (name, display_name, description, difficulty)
+            thumbnail_surface: 縮圖 pygame Surface
+        """
+        self.rect = pygame.Rect(x, y, width, height)
+        self.shape_type = shape_type
+        self.metadata = metadata
+        self.thumbnail = thumbnail_surface
+
+        self.is_selected = False
+        self.is_hovered = False
+        self.hover_progress = 0.0
+        self.select_progress = 0.0
+
+    def handle_event(self, event: pygame.event.Event) -> bool:
+        """處理滑鼠事件，返回 True 表示被點擊"""
+        if event.type == pygame.MOUSEMOTION:
+            self.is_hovered = self.rect.collidepoint(event.pos)
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 1 and self.rect.collidepoint(event.pos):
+                return True
+        return False
+
+    def update(self, dt: float):
+        """更新動畫狀態"""
+        # 懸停動畫
+        target = 1.0 if self.is_hovered else 0.0
+        self.hover_progress += (target - self.hover_progress) * min(1.0, dt * 8)
+
+        # 選中動畫
+        target_select = 1.0 if self.is_selected else 0.0
+        self.select_progress += (target_select - self.select_progress) * min(1.0, dt * 6)
+
+    def draw(
+        self,
+        screen: pygame.Surface,
+        font: pygame.font.Font,
+        small_font: pygame.font.Font,
+    ):
+        """繪製卡片"""
+        rect = self.rect
+
+        # 卡片背景顏色（根據選中/懸停狀態）
+        if self.is_selected:
+            bg_color = SECONDARY_COLOR
+            border_color = WHITE
+            border_width = 4
+        elif self.is_hovered:
+            bg_color = BG_SURFACE
+            border_color = PRIMARY_LIGHT
+            border_width = 3
+        else:
+            bg_color = BG_MEDIUM
+            border_color = GRAY
+            border_width = 2
+
+        # 繪製卡片背景
+        pygame.draw.rect(screen, bg_color, rect, border_radius=12)
+        pygame.draw.rect(screen, border_color, rect, width=border_width, border_radius=12)
+
+        # 繪製縮圖（置中於卡片上半部）
+        thumb_rect = self.thumbnail.get_rect(
+            center=(rect.centerx, rect.y + rect.height * 0.38)
+        )
+        screen.blit(self.thumbnail, thumb_rect)
+
+        # 繪製圖形名稱
+        name_color = WHITE if self.is_selected else TEXT_PRIMARY
+        name_surface = font.render(self.metadata["name"], True, name_color)
+        name_rect = name_surface.get_rect(center=(rect.centerx, rect.y + rect.height * 0.72))
+        screen.blit(name_surface, name_rect)
+
+        # 繪製難度星級
+        difficulty = self.metadata["difficulty"]
+        stars = "★" * difficulty + "☆" * (3 - difficulty)
+        diff_text = f"難度: {stars}"
+        diff_color = ACCENT_COLOR if self.is_selected else TEXT_MUTED
+        diff_surface = small_font.render(diff_text, True, diff_color)
+        diff_rect = diff_surface.get_rect(center=(rect.centerx, rect.y + rect.height * 0.88))
+        screen.blit(diff_surface, diff_rect)

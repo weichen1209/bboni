@@ -7,18 +7,22 @@
 import pygame
 import math
 import random
+import numpy as np
+from typing import List
 from collections import deque
-from .base import Scene, Button, ProgressBar
+from .base import Scene, Button, ProgressBar, ShapeCard
 from ..config import *
+from ..utils.cv_scoring import ShapeType, SHAPE_METADATA, ShapeSimilarityScorer
 
 
 class ExposureStage(Scene):
     """曝光顯影關卡 - 保持穩定"""
 
     # 遊戲階段
-    PHASE_INSTRUCTIONS = 0
-    PHASE_EXPOSURE = 1
-    PHASE_RESULT = 2
+    PHASE_SELECTION = 0     # 圖形選擇（新增）
+    PHASE_INSTRUCTIONS = 1  # 操作說明
+    PHASE_EXPOSURE = 2      # 曝光中
+    PHASE_RESULT = 3        # 顯示結果
 
     # 曝光參數
     EXPOSURE_DURATION = 10.0      # 最長曝光時間 (秒)
@@ -89,6 +93,13 @@ class ExposureStage(Scene):
         self.small_font = None
         self.score_font = None
 
+        # 圖形選擇相關
+        self.shape_cards: List[ShapeCard] = []
+        self.confirm_button = Button(
+            SCREEN_WIDTH // 2 - 100, 580, 200, 50,
+            "確定選擇", PRIMARY_COLOR
+        )
+
     def on_enter(self):
         """進入場景"""
         super().on_enter()
@@ -112,8 +123,8 @@ class ExposureStage(Scene):
                 'alpha': random.randint(20, 50)
             })
 
-        # 重置狀態
-        self.phase = self.PHASE_INSTRUCTIONS
+        # 重置狀態 - 從選擇階段開始
+        self.phase = self.PHASE_SELECTION
         self.exposure_elapsed = 0.0
         self.exposure_progress = 0.0
         self.stability_samples = []
@@ -123,12 +134,14 @@ class ExposureStage(Scene):
         self.warning_flash = 0.0
         self._stability_history = []  # 重置穩定度歷史
 
-        # 生成 H 形目標圖案
-        self._generate_target_pattern()
+        # 初始化圖形選擇卡片
+        self._init_shape_cards()
 
     def handle_event(self, event: pygame.event.Event):
         """處理事件"""
-        if self.phase == self.PHASE_INSTRUCTIONS:
+        if self.phase == self.PHASE_SELECTION:
+            self._handle_selection_event(event)
+        elif self.phase == self.PHASE_INSTRUCTIONS:
             self._handle_instructions_event(event)
         elif self.phase == self.PHASE_EXPOSURE:
             self._handle_exposure_event(event)
@@ -139,6 +152,30 @@ class ExposureStage(Scene):
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
                 self.switch_to("menu")
+
+    def _handle_selection_event(self, event: pygame.event.Event):
+        """圖形選擇階段事件處理"""
+        # 處理卡片點擊
+        for card in self.shape_cards:
+            if card.handle_event(event):
+                # 取消所有選擇，選中當前卡片
+                for c in self.shape_cards:
+                    c.is_selected = False
+                card.is_selected = True
+                self.game.selected_shape_type = card.shape_type
+
+        # 處理確認按鈕
+        if self.confirm_button.handle_event(event):
+            self._confirm_selection()
+
+        # 鍵盤導航
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_RETURN or event.key == pygame.K_SPACE:
+                self._confirm_selection()
+            elif event.key == pygame.K_LEFT:
+                self._select_prev_shape()
+            elif event.key == pygame.K_RIGHT:
+                self._select_next_shape()
 
     def _handle_instructions_event(self, event: pygame.event.Event):
         """指示階段事件處理"""
@@ -162,6 +199,84 @@ class ExposureStage(Scene):
             if event.key == pygame.K_SPACE or event.key == pygame.K_RETURN:
                 self._finish_stage()
 
+    def _init_shape_cards(self):
+        """初始化圖形選擇卡片"""
+        shapes = [
+            ShapeType.TRANSISTOR,
+            ShapeType.CAPACITOR,
+            ShapeType.IC_CHIP,
+            ShapeType.OP_AMP,
+        ]
+
+        card_width = 180
+        card_height = 220
+        spacing = 30
+        total_width = len(shapes) * card_width + (len(shapes) - 1) * spacing
+        start_x = (SCREEN_WIDTH - total_width) // 2
+        card_y = 180
+
+        # 建立臨時評分器來生成縮圖
+        temp_scorer = ShapeSimilarityScorer((140, 100))
+
+        self.shape_cards = []
+        for i, shape_type in enumerate(shapes):
+            x = start_x + i * (card_width + spacing)
+
+            # 生成縮圖
+            thumb_img = temp_scorer.get_thumbnail(shape_type, (140, 100))
+
+            # 將灰階圖轉為紫色 RGB（配合曝光主題）
+            thumb_rgb = np.zeros((100, 140, 3), dtype=np.uint8)
+            thumb_rgb[:, :, 0] = thumb_img // 2      # R
+            thumb_rgb[:, :, 1] = thumb_img // 4      # G
+            thumb_rgb[:, :, 2] = thumb_img           # B (紫色為主)
+
+            # 轉換為 pygame surface
+            thumb_surface = pygame.image.frombuffer(
+                thumb_rgb.tobytes(), (140, 100), "RGB"
+            )
+
+            metadata = SHAPE_METADATA[shape_type]
+            card = ShapeCard(x, card_y, card_width, card_height, shape_type, metadata, thumb_surface)
+            self.shape_cards.append(card)
+
+        # 使用 game 中儲存的選擇（或預設第一個）
+        selected_type = self.game.selected_shape_type
+        for card in self.shape_cards:
+            card.is_selected = (card.shape_type == selected_type)
+
+    def _confirm_selection(self):
+        """確認圖形選擇，進入說明階段"""
+        # 生成選擇的圖形
+        self._generate_target_pattern()
+        self.phase = self.PHASE_INSTRUCTIONS
+
+    def _select_prev_shape(self):
+        """選擇上一個圖形"""
+        current_index = 0
+        for i, card in enumerate(self.shape_cards):
+            if card.is_selected:
+                current_index = i
+                card.is_selected = False
+                break
+
+        new_index = (current_index - 1) % len(self.shape_cards)
+        self.shape_cards[new_index].is_selected = True
+        self.game.selected_shape_type = self.shape_cards[new_index].shape_type
+
+    def _select_next_shape(self):
+        """選擇下一個圖形"""
+        current_index = 0
+        for i, card in enumerate(self.shape_cards):
+            if card.is_selected:
+                current_index = i
+                card.is_selected = False
+                break
+
+        new_index = (current_index + 1) % len(self.shape_cards)
+        self.shape_cards[new_index].is_selected = True
+        self.game.selected_shape_type = self.shape_cards[new_index].shape_type
+
     def _start_exposure(self):
         """開始曝光階段"""
         self.phase = self.PHASE_EXPOSURE
@@ -184,32 +299,239 @@ class ExposureStage(Scene):
             self.switch_to("result")
 
     def _generate_target_pattern(self):
-        """生成 H 形電路圖案（與第四關一致）"""
-        center = self.GRID_SIZE // 2
-        half_width = 2   # 線條半寬度
-        h_height = 12    # H 的高度範圍
-        h_width = 10     # H 的寬度範圍
+        """根據選擇的圖形類型生成目標圖案"""
+        shape_type = self.game.selected_shape_type
 
         # 清空網格
         for y in range(self.GRID_SIZE):
             for x in range(self.GRID_SIZE):
                 self.target_grid[y][x] = False
 
-        # H 的左側垂直線
-        for y in range(center - h_height, center + h_height + 1):
-            for x in range(center - h_width - half_width, center - h_width + half_width + 1):
+        if shape_type == ShapeType.TRANSISTOR:
+            self._generate_transistor_pattern()
+        elif shape_type == ShapeType.CAPACITOR:
+            self._generate_capacitor_pattern()
+        elif shape_type == ShapeType.IC_CHIP:
+            self._generate_ic_pattern()
+        elif shape_type == ShapeType.OP_AMP:
+            self._generate_opamp_pattern()
+        else:
+            self._generate_transistor_pattern()  # 預設
+
+    def _generate_transistor_pattern(self):
+        """生成 NPN 電晶體圖案（圓形 + 基極 + 集電極/發射極）"""
+        center = self.GRID_SIZE // 2
+        radius = 8
+
+        # 繪製圓形外框
+        for y in range(self.GRID_SIZE):
+            for x in range(self.GRID_SIZE):
+                dx = x - center
+                dy = y - center
+                dist = math.sqrt(dx * dx + dy * dy)
+                if radius - 1.5 <= dist <= radius + 1.5:
+                    if self._is_in_wafer_grid(x, y):
+                        self.target_grid[y][x] = True
+
+        # 基極線（左側水平線）
+        for x in range(center - radius - 6, center - radius + 1):
+            for y in range(center - 1, center + 2):
                 if self._is_in_wafer_grid(x, y):
                     self.target_grid[y][x] = True
 
-        # H 的右側垂直線
-        for y in range(center - h_height, center + h_height + 1):
-            for x in range(center + h_width - half_width, center + h_width + half_width + 1):
+        # 基極垂直線（圓內）
+        base_x = center - radius // 2
+        for y in range(center - radius // 2, center + radius // 2 + 1):
+            for x in range(base_x - 1, base_x + 2):
                 if self._is_in_wafer_grid(x, y):
                     self.target_grid[y][x] = True
 
-        # H 的中間水平線
-        for y in range(center - half_width, center + half_width + 1):
-            for x in range(center - h_width, center + h_width + 1):
+        # 集電極線（右上斜線）
+        for i in range(10):
+            x = base_x + i
+            y = center - radius // 3 - i
+            for dx in range(-1, 2):
+                for dy in range(-1, 2):
+                    if self._is_in_wafer_grid(x + dx, y + dy):
+                        self.target_grid[y + dy][x + dx] = True
+
+        # 發射極線（右下斜線）
+        for i in range(10):
+            x = base_x + i
+            y = center + radius // 3 + i
+            for dx in range(-1, 2):
+                for dy in range(-1, 2):
+                    if self._is_in_wafer_grid(x + dx, y + dy):
+                        self.target_grid[y + dy][x + dx] = True
+
+    def _generate_capacitor_pattern(self):
+        """生成變壓器圖案（兩組線圈 + 鐵芯）"""
+        center = self.GRID_SIZE // 2
+        coil_radius = 3
+        coil_count = 3
+        gap = 4
+
+        # 左側線圈（3 個半圓弧效果）
+        left_x = center - gap
+        for i in range(coil_count):
+            arc_y = center - (coil_count - 1) * coil_radius + i * 2 * coil_radius
+            # 繪製半圓（左凸）
+            for angle in range(90, 271):
+                rad = math.radians(angle)
+                x = int(left_x + coil_radius * math.cos(rad))
+                y = int(arc_y + coil_radius * math.sin(rad))
+                for dx in range(-1, 2):
+                    for dy in range(-1, 2):
+                        if self._is_in_wafer_grid(x + dx, y + dy):
+                            self.target_grid[y + dy][x + dx] = True
+
+        # 右側線圈（3 個半圓弧效果）
+        right_x = center + gap
+        for i in range(coil_count):
+            arc_y = center - (coil_count - 1) * coil_radius + i * 2 * coil_radius
+            # 繪製半圓（右凸）
+            for angle in range(-90, 91):
+                rad = math.radians(angle)
+                x = int(right_x + coil_radius * math.cos(rad))
+                y = int(arc_y + coil_radius * math.sin(rad))
+                for dx in range(-1, 2):
+                    for dy in range(-1, 2):
+                        if self._is_in_wafer_grid(x + dx, y + dy):
+                            self.target_grid[y + dy][x + dx] = True
+
+        # 中間鐵芯（兩條平行線）
+        core_height = coil_count * 2 * coil_radius
+        for y in range(center - core_height // 2, center + core_height // 2 + 1):
+            for x in range(center - 1, center):
+                if self._is_in_wafer_grid(x, y):
+                    self.target_grid[y][x] = True
+            for x in range(center + 1, center + 2):
+                if self._is_in_wafer_grid(x, y):
+                    self.target_grid[y][x] = True
+
+    def _generate_ic_pattern(self):
+        """生成 IC 晶片圖案（矩形 + 引腳）"""
+        center = self.GRID_SIZE // 2
+        half_width = 2
+        rect_size = 8
+        pin_length = 4
+
+        # 矩形外框（四邊）
+        # 頂邊
+        for y in range(center - rect_size - half_width, center - rect_size + half_width + 1):
+            for x in range(center - rect_size, center + rect_size + 1):
+                if self._is_in_wafer_grid(x, y):
+                    self.target_grid[y][x] = True
+        # 底邊
+        for y in range(center + rect_size - half_width, center + rect_size + half_width + 1):
+            for x in range(center - rect_size, center + rect_size + 1):
+                if self._is_in_wafer_grid(x, y):
+                    self.target_grid[y][x] = True
+        # 左邊
+        for y in range(center - rect_size, center + rect_size + 1):
+            for x in range(center - rect_size - half_width, center - rect_size + half_width + 1):
+                if self._is_in_wafer_grid(x, y):
+                    self.target_grid[y][x] = True
+        # 右邊
+        for y in range(center - rect_size, center + rect_size + 1):
+            for x in range(center + rect_size - half_width, center + rect_size + half_width + 1):
+                if self._is_in_wafer_grid(x, y):
+                    self.target_grid[y][x] = True
+
+        # 引腳（每邊 3 個）
+        pin_positions = [-5, 0, 5]
+        for offset in pin_positions:
+            # 頂部引腳
+            for y in range(center - rect_size - pin_length, center - rect_size):
+                for x in range(center + offset - 1, center + offset + 2):
+                    if self._is_in_wafer_grid(x, y):
+                        self.target_grid[y][x] = True
+            # 底部引腳
+            for y in range(center + rect_size + 1, center + rect_size + pin_length + 1):
+                for x in range(center + offset - 1, center + offset + 2):
+                    if self._is_in_wafer_grid(x, y):
+                        self.target_grid[y][x] = True
+            # 左側引腳
+            for y in range(center + offset - 1, center + offset + 2):
+                for x in range(center - rect_size - pin_length, center - rect_size):
+                    if self._is_in_wafer_grid(x, y):
+                        self.target_grid[y][x] = True
+            # 右側引腳
+            for y in range(center + offset - 1, center + offset + 2):
+                for x in range(center + rect_size + 1, center + rect_size + pin_length + 1):
+                    if self._is_in_wafer_grid(x, y):
+                        self.target_grid[y][x] = True
+
+    def _generate_opamp_pattern(self):
+        """生成比較器電路圖案（三角形 + 電源腳位 V+/V- + 輸入輸出線）"""
+        center = self.GRID_SIZE // 2
+        # 加大尺寸以容納電源腳位
+        tri_height = 16
+        tri_width = 12
+
+        # 三角形頂點座標
+        left_x = center - tri_width // 2
+        right_x = center + tri_width // 2
+        top_y = center - tri_height // 2
+        bottom_y = center + tri_height // 2
+
+        # 1. 左邊垂直線
+        for y in range(top_y, bottom_y + 1):
+            for x in range(left_x - 1, left_x + 2):
+                if self._is_in_wafer_grid(x, y):
+                    self.target_grid[y][x] = True
+
+        # 2. 上斜線（左上到右中）
+        for i in range(tri_width + 2):
+            x = left_x + i
+            y = top_y + (tri_height // 2) * i // tri_width
+            for dx in range(-1, 2):
+                for dy in range(-1, 2):
+                    if self._is_in_wafer_grid(x + dx, y + dy):
+                        self.target_grid[y + dy][x + dx] = True
+
+        # 3. 下斜線（左下到右中）
+        for i in range(tri_width + 2):
+            x = left_x + i
+            y = bottom_y - (tri_height // 2) * i // tri_width
+            for dx in range(-1, 2):
+                for dy in range(-1, 2):
+                    if self._is_in_wafer_grid(x + dx, y + dy):
+                        self.target_grid[y + dy][x + dx] = True
+
+        # 4. V+ 電源線（三角形頂部中央向上延伸）
+        vplus_x = center
+        vplus_len = 5
+        for y in range(top_y - vplus_len, top_y + 1):
+            for x in range(vplus_x - 1, vplus_x + 2):
+                if self._is_in_wafer_grid(x, y):
+                    self.target_grid[y][x] = True
+
+        # 5. V- 接地線（三角形底部中央向下延伸）
+        vminus_x = center
+        vminus_len = 5
+        for y in range(bottom_y, bottom_y + vminus_len + 1):
+            for x in range(vminus_x - 1, vminus_x + 2):
+                if self._is_in_wafer_grid(x, y):
+                    self.target_grid[y][x] = True
+
+        # 6. + 輸入線（左側上方）
+        plus_y = center - tri_height // 4
+        for x in range(left_x - 6, left_x):
+            for y in range(plus_y - 1, plus_y + 2):
+                if self._is_in_wafer_grid(x, y):
+                    self.target_grid[y][x] = True
+
+        # 7. - 輸入線（左側下方）
+        minus_y = center + tri_height // 4
+        for x in range(left_x - 6, left_x):
+            for y in range(minus_y - 1, minus_y + 2):
+                if self._is_in_wafer_grid(x, y):
+                    self.target_grid[y][x] = True
+
+        # 8. 輸出線（右側）
+        for x in range(right_x, right_x + 6):
+            for y in range(center - 1, center + 2):
                 if self._is_in_wafer_grid(x, y):
                     self.target_grid[y][x] = True
 
@@ -293,6 +615,7 @@ class ExposureStage(Scene):
         # 更新按鈕動畫
         self.start_button.update(dt)
         self.next_button.update(dt)
+        self.confirm_button.update(dt)
 
         # 更新進度條動畫
         self.progress_bar.update(dt)
@@ -301,7 +624,11 @@ class ExposureStage(Scene):
         # 更新環境粒子
         self._update_ambient_particles(dt)
 
-        if self.phase == self.PHASE_INSTRUCTIONS:
+        if self.phase == self.PHASE_SELECTION:
+            # 更新卡片動畫
+            for card in self.shape_cards:
+                card.update(dt)
+        elif self.phase == self.PHASE_INSTRUCTIONS:
             pass  # 等待使用者開始
         elif self.phase == self.PHASE_EXPOSURE:
             self._update_exposure_phase(dt)
@@ -355,7 +682,9 @@ class ExposureStage(Scene):
         # 環境粒子
         self._draw_ambient_particles(screen)
 
-        if self.phase == self.PHASE_INSTRUCTIONS:
+        if self.phase == self.PHASE_SELECTION:
+            self._draw_selection(screen)
+        elif self.phase == self.PHASE_INSTRUCTIONS:
             self._draw_instructions(screen)
         elif self.phase == self.PHASE_EXPOSURE:
             self._draw_exposure_phase(screen)
@@ -364,6 +693,44 @@ class ExposureStage(Scene):
 
         # 淡入淡出遮罩
         self.draw_fade_overlay(screen)
+
+    def _draw_selection(self, screen: pygame.Surface):
+        """繪製圖形選擇畫面"""
+        # 標題
+        self.draw_title(screen, "選擇電路圖案", y=60, font=self.title_font)
+
+        # 副標題
+        subtitle = self.text_font.render(
+            "選擇要繪製的半導體電路圖案", True, TEXT_SECONDARY
+        )
+        subtitle_rect = subtitle.get_rect(center=(SCREEN_WIDTH // 2, 120))
+        screen.blit(subtitle, subtitle_rect)
+
+        # 繪製圖形選擇卡片
+        for card in self.shape_cards:
+            card.draw(screen, self.text_font, self.small_font)
+
+        # 已選擇的圖形資訊
+        selected_meta = SHAPE_METADATA[self.game.selected_shape_type]
+        status = f"已選擇: {selected_meta['display_name']}"
+        status_surface = self.text_font.render(status, True, SECONDARY_COLOR)
+        status_rect = status_surface.get_rect(center=(SCREEN_WIDTH // 2, 450))
+        screen.blit(status_surface, status_rect)
+
+        # 圖形描述
+        desc = selected_meta["description"]
+        desc_surface = self.small_font.render(desc, True, TEXT_MUTED)
+        desc_rect = desc_surface.get_rect(center=(SCREEN_WIDTH // 2, 490))
+        screen.blit(desc_surface, desc_rect)
+
+        # 鍵盤提示
+        hint = "使用 ← → 選擇，Enter 確定"
+        hint_surface = self.small_font.render(hint, True, TEXT_MUTED)
+        hint_rect = hint_surface.get_rect(center=(SCREEN_WIDTH // 2, 530))
+        screen.blit(hint_surface, hint_rect)
+
+        # 確認按鈕
+        self.confirm_button.draw(screen)
 
     def _draw_ambient_particles(self, screen: pygame.Surface):
         """繪製環境粒子"""

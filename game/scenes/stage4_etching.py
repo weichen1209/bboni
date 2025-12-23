@@ -1,102 +1,85 @@
 """
-第四關：蝕刻
-玩家透過傾斜控制蝕刻方向，搖晃控制蝕刻速度
-目標是精確地蝕刻出電路圖案
+第四關：手繪電路
+玩家使用 webcam 和手部追蹤，在螢幕上繪製 H 形電路圖案
+使用相似度模型評分
 """
 
 import pygame
-import math
-import random
+import cv2
+import numpy as np
+from typing import List, Tuple, Optional
 from .base import Scene, Button, ProgressBar
 from ..config import *
+from ..utils.hand_tracker import HandTracker
+from ..utils.cv_scoring import ShapeSimilarityScorer, ShapeType, SHAPE_METADATA
 
 
 class EtchingStage(Scene):
-    """蝕刻關卡 - 傾斜控制方向，搖晃控制速度"""
+    """手繪電路關卡 - 使用 webcam 手部追蹤"""
 
     # 遊戲階段
-    PHASE_INSTRUCTIONS = 0
-    PHASE_ETCHING = 1
-    PHASE_RESULT = 2
+    PHASE_LOADING = 0       # 載入攝影機
+    PHASE_INSTRUCTIONS = 1  # 操作說明
+    PHASE_DRAWING = 2       # 繪圖中
+    PHASE_RESULT = 3        # 顯示結果
 
-    # 蝕刻參數
-    ETCHING_DURATION = 20.0       # 蝕刻時間限制 (秒)
-    WAFER_RADIUS = 150            # 晶圓半徑 (像素)
-    GRID_SIZE = 40                # 圖案網格解析度
-
-    # 陀螺儀參數（與 Stage 2 一致）
-    GYRO_DEADZONE = 300           # 死區（濾除平放時的雜訊）
-    GYRO_MAX = 2000               # 最大有效值
-    CURSOR_MAX_SPEED = 300.0      # 最大移動速度（像素/秒）
-    CURSOR_MIN_SPEED = 50.0       # 最小移動速度（像素/秒）
-
-    # 蝕刻參數
-    ETCH_RATE_BASE = 0.3          # 基礎蝕刻速率
-    ETCH_RATE_MAX = 1.5           # 最大蝕刻速率
-    BRUSH_RADIUS_BASE = 1         # 基礎蝕刻筆刷半徑
-    BRUSH_RADIUS_MAX = 2          # 最大蝕刻筆刷半徑
+    # 繪圖參數
+    DRAWING_DURATION = 20.0       # 繪圖時間限制 (秒)
+    WEBCAM_WIDTH = 640
+    WEBCAM_HEIGHT = 480
+    TRAIL_COLOR = (0, 255, 255)   # 軌跡顏色 (BGR - 青色)
+    TRAIL_THICKNESS = 6           # 軌跡粗細
 
     def __init__(self, game):
         super().__init__(game)
 
         # 遊戲階段
-        self.phase = self.PHASE_INSTRUCTIONS
+        self.phase = self.PHASE_LOADING
 
-        # 晶圓中心位置
-        self.wafer_center_x = SCREEN_WIDTH // 2
-        self.wafer_center_y = 300
+        # 手部追蹤器
+        self.hand_tracker: Optional[HandTracker] = None
 
-        # 游標位置
-        self.cursor_x = float(self.wafer_center_x)
-        self.cursor_y = float(self.wafer_center_y)
-        self.cursor_velocity_x = 0.0
-        self.cursor_velocity_y = 0.0
+        # 繪圖狀態
+        self.drawing_points: List[Tuple[int, int]] = []
+        self.drawing_elapsed = 0.0
 
-        # 圖案網格
-        # target_grid: 目標蝕刻區域 (True = 需要蝕刻)
-        # etched_grid: 已蝕刻深度 (0.0 ~ 1.0)
-        self.target_grid = [[False] * self.GRID_SIZE for _ in range(self.GRID_SIZE)]
-        self.etched_grid = [[0.0] * self.GRID_SIZE for _ in range(self.GRID_SIZE)]
-
-        # 計時器
-        self.etching_elapsed = 0.0
-
-        # 當前蝕刻強度
-        self.current_intensity = 0.0
+        # 評分器
+        self.scorer: Optional[ShapeSimilarityScorer] = None
 
         # 分數
-        self.coverage_score = 0
-        self.accuracy_score = 0
-        self.uniformity_score = 0
         self.precision_score = 0
+        self.coverage_score = 0
+        self.iou_score = 0
 
-        # 粒子效果
-        self.plasma_particles = []
+        # Webcam 顯示位置（置中）
+        self.webcam_x = (SCREEN_WIDTH - self.WEBCAM_WIDTH) // 2
+        self.webcam_y = 60
 
-        # 動畫
-        self.pulse_animation = 0.0
-        self.cursor_glow = 0.0
+        # 目標圖形疊加層
+        self._target_overlay: Optional[pygame.Surface] = None
+
+        # 載入狀態
+        self._loading_progress = 0.0
+        self._loading_message = "初始化..."
 
         # UI 元件
         center_x = SCREEN_WIDTH // 2
         self.start_button = Button(
-            center_x - 100, 580, 200, 50,
-            "開始蝕刻", PRIMARY_COLOR
+            center_x - 100, 650, 200, 50,
+            "開始繪圖", PRIMARY_COLOR
+        )
+        self.finish_button = Button(
+            center_x - 100, 650, 200, 50,
+            "完成", SECONDARY_COLOR
         )
         self.next_button = Button(
-            center_x - 100, 620, 200, 50,
+            center_x - 100, 650, 200, 50,
             "查看結果", PRIMARY_COLOR
         )
         self.timer_bar = ProgressBar(
-            center_x - 250, 70, 500, 20,
+            center_x - 250, 590, 500, 16,
             bg_color=DARK_GRAY,
             fill_color=ACCENT_COLOR,
-            border_color=GRAY
-        )
-        self.intensity_bar = ProgressBar(
-            center_x - 150, 540, 300, 15,
-            bg_color=DARK_GRAY,
-            fill_color=DANGER_COLOR,
             border_color=GRAY
         )
 
@@ -106,7 +89,6 @@ class EtchingStage(Scene):
         self.small_font = None
         self.score_font = None
 
-
     def on_enter(self):
         """進入場景"""
         super().on_enter()
@@ -115,88 +97,74 @@ class EtchingStage(Scene):
         self.small_font = pygame.font.SysFont("Microsoft JhengHei", 18)
         self.score_font = pygame.font.SysFont("Microsoft JhengHei", 48)
 
-        # 預繪製增強版漸層背景（電漿青色調）
+        # 預繪製增強版漸層背景
         self._bg_surface = self.create_enhanced_background(PLASMA_CYAN_DARK, add_vignette=True, add_grid=True)
 
-        # 環境粒子（電漿粒子）
-        self.ambient_particles = []
-        for _ in range(25):
-            self.ambient_particles.append({
-                'x': random.randint(0, SCREEN_WIDTH),
-                'y': random.randint(0, SCREEN_HEIGHT),
-                'vx': random.uniform(-8, 8),
-                'vy': random.uniform(-12, -3),
-                'size': random.uniform(1, 2.5),
-                'alpha': random.randint(15, 45)
-            })
-
-        # 重置狀態
-        self.phase = self.PHASE_INSTRUCTIONS
-        self.cursor_x = float(self.wafer_center_x)
-        self.cursor_y = float(self.wafer_center_y)
-        self.cursor_velocity_x = 0.0
-        self.cursor_velocity_y = 0.0
-        self.etching_elapsed = 0.0
-        self.current_intensity = 0.0
-        self.plasma_particles = []
+        # 重置狀態 - 直接從載入階段開始（圖形已在第三關選擇）
+        self.phase = self.PHASE_LOADING
+        self.drawing_points = []
+        self.drawing_elapsed = 0.0
         self.precision_score = 0
+        self._loading_progress = 0.0
+        self._loading_message = "初始化攝影機..."
 
-        # 生成目標圖案
-        self._generate_target_pattern()
+        # 初始化評分器（使用第三關選擇的圖形）
+        self.scorer = ShapeSimilarityScorer((self.WEBCAM_WIDTH, self.WEBCAM_HEIGHT))
+        self.scorer.create_target_image(self.game.selected_shape_type, thickness=12)
 
-        # 重置蝕刻網格
-        self.etched_grid = [[0.0] * self.GRID_SIZE for _ in range(self.GRID_SIZE)]
+        # 建立目標圖形疊加層
+        self._create_target_overlay()
 
-    def _generate_target_pattern(self):
-        """生成 H 形電路圖案"""
-        center = self.GRID_SIZE // 2
-        half_width = 2   # 線條半寬度
-        h_height = 12    # H 的高度範圍
-        h_width = 10     # H 的寬度範圍
+        # 開始初始化手部追蹤器
+        self._init_hand_tracker()
 
-        # 清空網格
-        for y in range(self.GRID_SIZE):
-            for x in range(self.GRID_SIZE):
-                self.target_grid[y][x] = False
+    def _init_hand_tracker(self):
+        """初始化手部追蹤器"""
+        self.hand_tracker = HandTracker(
+            camera_index=0,
+            width=self.WEBCAM_WIDTH,
+            height=self.WEBCAM_HEIGHT
+        )
 
-        # H 的左側垂直線
-        for y in range(center - h_height, center + h_height + 1):
-            for x in range(center - h_width - half_width, center - h_width + half_width + 1):
-                if self._is_in_wafer_grid(x, y):
-                    self.target_grid[y][x] = True
+        if self.hand_tracker.start():
+            self._loading_message = "載入完成！"
+            self._loading_progress = 1.0
+            self.phase = self.PHASE_INSTRUCTIONS
+        else:
+            self._loading_message = "無法開啟攝影機！"
+            self._loading_progress = 0.0
 
-        # H 的右側垂直線
-        for y in range(center - h_height, center + h_height + 1):
-            for x in range(center + h_width - half_width, center + h_width + half_width + 1):
-                if self._is_in_wafer_grid(x, y):
-                    self.target_grid[y][x] = True
+    def _create_target_overlay(self):
+        """建立目標圖形的 pygame 疊加層"""
+        if self.scorer is None:
+            return
 
-        # H 的中間水平線
-        for y in range(center - half_width, center + half_width + 1):
-            for x in range(center - h_width, center + h_width + 1):
-                if self._is_in_wafer_grid(x, y):
-                    self.target_grid[y][x] = True
+        # 取得 BGRA 格式的疊加圖像
+        overlay_bgra = self.scorer.get_target_overlay_image(alpha=0.4, color=(0, 255, 100))
 
-    def _is_in_wafer_grid(self, gx: int, gy: int) -> bool:
-        """檢查網格座標是否在晶圓範圍內"""
-        if gx < 0 or gx >= self.GRID_SIZE or gy < 0 or gy >= self.GRID_SIZE:
-            return False
+        # 轉換為 pygame surface
+        # OpenCV 是 BGRA，pygame 需要 RGBA
+        overlay_rgba = cv2.cvtColor(overlay_bgra, cv2.COLOR_BGRA2RGBA)
 
-        # 轉換為相對於中心的座標
-        center = self.GRID_SIZE // 2
-        dx = gx - center
-        dy = gy - center
+        self._target_overlay = pygame.image.frombuffer(
+            overlay_rgba.tobytes(),
+            (self.WEBCAM_WIDTH, self.WEBCAM_HEIGHT),
+            'RGBA'
+        )
 
-        # 檢查是否在圓形範圍內
-        grid_radius = self.GRID_SIZE // 2 - 2
-        return (dx * dx + dy * dy) <= (grid_radius * grid_radius)
+    def on_exit(self):
+        """離開場景"""
+        super().on_exit()
+        if self.hand_tracker:
+            self.hand_tracker.stop()
+            self.hand_tracker = None
 
     def handle_event(self, event: pygame.event.Event):
         """處理事件"""
         if self.phase == self.PHASE_INSTRUCTIONS:
             self._handle_instructions_event(event)
-        elif self.phase == self.PHASE_ETCHING:
-            self._handle_etching_event(event)
+        elif self.phase == self.PHASE_DRAWING:
+            self._handle_drawing_event(event)
         elif self.phase == self.PHASE_RESULT:
             self._handle_result_event(event)
 
@@ -208,15 +176,20 @@ class EtchingStage(Scene):
     def _handle_instructions_event(self, event: pygame.event.Event):
         """指示階段事件處理"""
         if self.start_button.handle_event(event):
-            self._start_etching()
+            self._start_drawing()
 
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_SPACE or event.key == pygame.K_RETURN:
-                self._start_etching()
+                self._start_drawing()
 
-    def _handle_etching_event(self, event: pygame.event.Event):
-        """蝕刻階段事件處理"""
-        pass  # 蝕刻期間不需要特別事件處理
+    def _handle_drawing_event(self, event: pygame.event.Event):
+        """繪圖階段事件處理"""
+        if self.finish_button.handle_event(event):
+            self._finish_drawing()
+
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_SPACE or event.key == pygame.K_RETURN:
+                self._finish_drawing()
 
     def _handle_result_event(self, event: pygame.event.Event):
         """結果階段事件處理"""
@@ -227,18 +200,24 @@ class EtchingStage(Scene):
             if event.key == pygame.K_SPACE or event.key == pygame.K_RETURN:
                 self._finish_stage()
 
-    def _start_etching(self):
-        """開始蝕刻階段"""
-        self.phase = self.PHASE_ETCHING
-        self.etching_elapsed = 0.0
-        self.cursor_x = float(self.wafer_center_x)
-        self.cursor_y = float(self.wafer_center_y)
-        self.etched_grid = [[0.0] * self.GRID_SIZE for _ in range(self.GRID_SIZE)]
-        self.plasma_particles = []
+    def _start_drawing(self):
+        """開始繪圖階段"""
+        self.phase = self.PHASE_DRAWING
+        self.drawing_points = []
+        self.drawing_elapsed = 0.0
 
-    def _finish_etching(self):
-        """完成蝕刻，計算分數"""
-        self.precision_score = self._calculate_precision_score()
+    def _finish_drawing(self):
+        """完成繪圖，計算分數"""
+        if self.scorer and len(self.drawing_points) > 10:
+            total_score, scores = self.scorer.get_combined_score(self.drawing_points)
+            self.precision_score = total_score
+            self.coverage_score = int(scores.get("coverage", 0))
+            self.iou_score = int(scores.get("iou", 0))
+        else:
+            self.precision_score = 0
+            self.coverage_score = 0
+            self.iou_score = 0
+
         self.game.scores["precision"] = self.precision_score
         self.phase = self.PHASE_RESULT
 
@@ -246,524 +225,261 @@ class EtchingStage(Scene):
         """完成關卡，進入結果畫面"""
         self.switch_to("result")
 
-    def _get_cursor_velocity(self) -> tuple:
-        """取得游標速度（根據陀螺儀，與 Stage 2 一致）"""
-        if self.game.sensor and self.game.sensor.is_connected:
-            data = self.game.sensor.get_imu_data()
-            # 使用校正後的陀螺儀資料
-            gx = data.gx  # 左右傾斜
-            gy = data.gy  # 前後傾斜
-        else:
-            gx, gy = 0.0, 0.0
-
-        def apply_deadzone_and_scale(gyro: float) -> float:
-            if abs(gyro) < self.GYRO_DEADZONE:
-                return 0.0
-
-            sign = 1 if gyro > 0 else -1
-            effective = abs(gyro) - self.GYRO_DEADZONE
-            max_effective = self.GYRO_MAX - self.GYRO_DEADZONE
-            effective = min(effective, max_effective)
-            normalized = effective / max_effective
-            speed = self.CURSOR_MIN_SPEED + normalized * (self.CURSOR_MAX_SPEED - self.CURSOR_MIN_SPEED)
-            return sign * speed
-
-        # gx 控制左右傾斜（取負號：左傾gx>0 → vx<0向左）
-        vx = -apply_deadzone_and_scale(gx)
-        # gy 控制前後傾斜
-        vy = apply_deadzone_and_scale(gy)
-
-        return (vx, vy)
-
-    def _get_etch_intensity(self) -> float:
-        """取得蝕刻強度（從搖晃）"""
-        if self.game.sensor and self.game.sensor.is_connected:
-            return self.game.sensor.get_shake_intensity()
-        return 0.0
-
-    def _update_cursor(self, dt: float):
-        """更新游標位置"""
-        vx, vy = self._get_cursor_velocity()
-
-        # 平滑速度變化（與 Stage 2 一致）
-        smoothing = 0.3
-        self.cursor_velocity_x = self.cursor_velocity_x * (1 - smoothing) + vx * smoothing
-        self.cursor_velocity_y = self.cursor_velocity_y * (1 - smoothing) + vy * smoothing
-
-        # 更新位置
-        self.cursor_x += self.cursor_velocity_x * dt
-        self.cursor_y += self.cursor_velocity_y * dt
-
-        # 限制在晶圓範圍內
-        dx = self.cursor_x - self.wafer_center_x
-        dy = self.cursor_y - self.wafer_center_y
-        dist = math.sqrt(dx * dx + dy * dy)
-
-        if dist > self.WAFER_RADIUS - 10:
-            # 將游標推回晶圓內
-            scale = (self.WAFER_RADIUS - 10) / dist
-            self.cursor_x = self.wafer_center_x + dx * scale
-            self.cursor_y = self.wafer_center_y + dy * scale
-
-    def _cursor_to_grid(self, cx: float, cy: float) -> tuple:
-        """將游標像素座標轉換為網格座標"""
-        # 相對於晶圓中心的偏移
-        dx = cx - self.wafer_center_x
-        dy = cy - self.wafer_center_y
-
-        # 轉換為網格座標（晶圓直徑對應整個網格）
-        grid_center = self.GRID_SIZE // 2
-        scale = self.GRID_SIZE / (self.WAFER_RADIUS * 2)
-
-        gx = int(grid_center + dx * scale)
-        gy = int(grid_center + dy * scale)
-
-        return (gx, gy)
-
-    def _grid_to_pixel(self, gx: int, gy: int) -> tuple:
-        """將網格座標轉換為像素座標"""
-        grid_center = self.GRID_SIZE // 2
-        scale = (self.WAFER_RADIUS * 2) / self.GRID_SIZE
-
-        px = self.wafer_center_x + (gx - grid_center) * scale
-        py = self.wafer_center_y + (gy - grid_center) * scale
-
-        return (px, py)
-
-    def _etch_at_cursor(self, intensity: float, dt: float):
-        """在游標位置進行蝕刻"""
-        if intensity <= 0:
-            return
-
-        # 取得網格座標
-        gx, gy = self._cursor_to_grid(self.cursor_x, self.cursor_y)
-
-        # 計算蝕刻量和筆刷大小
-        etch_amount = (self.ETCH_RATE_BASE + intensity * (self.ETCH_RATE_MAX - self.ETCH_RATE_BASE)) * dt
-        brush_radius = self.BRUSH_RADIUS_BASE + int(intensity * (self.BRUSH_RADIUS_MAX - self.BRUSH_RADIUS_BASE))
-
-        # 在筆刷範圍內蝕刻
-        for dx in range(-brush_radius, brush_radius + 1):
-            for dy in range(-brush_radius, brush_radius + 1):
-                nx, ny = gx + dx, gy + dy
-                if self._is_in_wafer_grid(nx, ny):
-                    # 距離衰減
-                    dist = math.sqrt(dx * dx + dy * dy)
-                    if dist <= brush_radius:
-                        falloff = 1.0 - (dist / (brush_radius + 1))
-                        self.etched_grid[ny][nx] = min(1.0, self.etched_grid[ny][nx] + etch_amount * falloff)
-
-    def _spawn_plasma_particles(self, intensity: float):
-        """生成電漿粒子效果"""
-        if intensity <= 0 or random.random() > intensity:
-            return
-
-        count = int(1 + intensity * 3)
-        for _ in range(count):
-            angle = random.uniform(0, 2 * math.pi)
-            speed = random.uniform(30, 80) * intensity
-            self.plasma_particles.append({
-                "x": self.cursor_x,
-                "y": self.cursor_y,
-                "vx": math.cos(angle) * speed,
-                "vy": math.sin(angle) * speed,
-                "life": 0.5,
-                "max_life": 0.5,
-            })
-
-    def _update_particles(self, dt: float):
-        """更新粒子"""
-        for p in self.plasma_particles[:]:
-            p["x"] += p["vx"] * dt
-            p["y"] += p["vy"] * dt
-            p["life"] -= dt
-
-            if p["life"] <= 0:
-                self.plasma_particles.remove(p)
-
-    def _calculate_precision_score(self) -> int:
-        """計算蝕刻精準度分數"""
-        target_count = 0
-        etched_on_target = 0
-        etched_off_target = 0
-        etch_depths = []
-
-        for y in range(self.GRID_SIZE):
-            for x in range(self.GRID_SIZE):
-                if not self._is_in_wafer_grid(x, y):
-                    continue
-
-                is_target = self.target_grid[y][x]
-                etch_depth = self.etched_grid[y][x]
-
-                if is_target:
-                    target_count += 1
-                    if etch_depth > 0.3:  # 視為已蝕刻
-                        etched_on_target += 1
-                        etch_depths.append(etch_depth)
-                else:
-                    if etch_depth > 0.3:  # 過度蝕刻
-                        etched_off_target += 1
-
-        # 覆蓋率 (40%)：目標區域被蝕刻的比例
-        if target_count > 0:
-            coverage = etched_on_target / target_count
-        else:
-            coverage = 0.0
-
-        # 準確率 (40%)：正確蝕刻 vs 總蝕刻
-        total_etched = etched_on_target + etched_off_target
-        if total_etched > 0:
-            accuracy = etched_on_target / total_etched
-        else:
-            accuracy = 0.0
-
-        # 均勻度 (20%)：蝕刻深度一致性
-        if len(etch_depths) > 1:
-            avg_depth = sum(etch_depths) / len(etch_depths)
-            variance = sum((d - avg_depth) ** 2 for d in etch_depths) / len(etch_depths)
-            std_dev = variance ** 0.5
-            uniformity = max(0.0, 1.0 - std_dev)
-        else:
-            uniformity = 0.5
-
-        # 儲存分項分數
-        self.coverage_score = int(coverage * 100)
-        self.accuracy_score = int(accuracy * 100)
-        self.uniformity_score = int(uniformity * 100)
-
-        # 加權總分
-        COVERAGE_WEIGHT = 0.40
-        ACCURACY_WEIGHT = 0.40
-        UNIFORMITY_WEIGHT = 0.20
-
-        score = (
-            coverage * COVERAGE_WEIGHT +
-            accuracy * ACCURACY_WEIGHT +
-            uniformity * UNIFORMITY_WEIGHT
-        ) * 100
-
-        return int(max(0, min(100, score)))
-
     def update(self, dt: float):
         """更新遊戲邏輯"""
         # 更新淡入淡出
         self.update_fade(dt)
 
-        # 更新動畫
-        self.pulse_animation += dt * 5
-
         # 更新按鈕動畫
         self.start_button.update(dt)
+        self.finish_button.update(dt)
         self.next_button.update(dt)
-
-        # 更新進度條動畫
         self.timer_bar.update(dt)
-        self.intensity_bar.update(dt)
 
-        # 更新環境粒子
-        self._update_ambient_particles(dt)
-
-        if self.phase == self.PHASE_INSTRUCTIONS:
-            pass
-        elif self.phase == self.PHASE_ETCHING:
-            self._update_etching_phase(dt)
+        if self.phase == self.PHASE_LOADING:
+            pass  # 等待載入完成
+        elif self.phase == self.PHASE_INSTRUCTIONS:
+            self._update_webcam()
+        elif self.phase == self.PHASE_DRAWING:
+            self._update_drawing_phase(dt)
         elif self.phase == self.PHASE_RESULT:
             pass
 
-    def _update_ambient_particles(self, dt: float):
-        """更新環境粒子"""
-        for p in self.ambient_particles:
-            p['x'] += p['vx'] * dt
-            p['y'] += p['vy'] * dt
-            if p['y'] < -10:
-                p['y'] = SCREEN_HEIGHT + 10
-                p['x'] = random.randint(0, SCREEN_WIDTH)
-            if p['x'] < -10:
-                p['x'] = SCREEN_WIDTH + 10
-            elif p['x'] > SCREEN_WIDTH + 10:
-                p['x'] = -10
+    def _update_webcam(self):
+        """更新 webcam（不記錄軌跡）"""
+        if self.hand_tracker and self.hand_tracker.is_running:
+            self.hand_tracker.update()
 
-    def _update_etching_phase(self, dt: float):
-        """蝕刻階段更新"""
+    def _update_drawing_phase(self, dt: float):
+        """繪圖階段更新"""
         # 更新計時
-        self.etching_elapsed += dt
-        remaining = max(0, self.ETCHING_DURATION - self.etching_elapsed)
-        self.timer_bar.set_progress(remaining / self.ETCHING_DURATION)
+        self.drawing_elapsed += dt
+        remaining = max(0, self.DRAWING_DURATION - self.drawing_elapsed)
+        self.timer_bar.set_progress(remaining / self.DRAWING_DURATION)
 
-        # 更新游標
-        self._update_cursor(dt)
-
-        # 取得蝕刻強度
-        self.current_intensity = self._get_etch_intensity()
-        self.intensity_bar.set_progress(self.current_intensity)
-
-        # 蝕刻
-        self._etch_at_cursor(self.current_intensity, dt)
-
-        # 生成粒子
-        self._spawn_plasma_particles(self.current_intensity)
-        self._update_particles(dt)
-
-        # 更新游標發光效果
-        if self.current_intensity > 0:
-            self.cursor_glow = min(1.0, self.cursor_glow + dt * 5)
-        else:
-            self.cursor_glow = max(0.0, self.cursor_glow - dt * 3)
+        # 更新 webcam 和手部追蹤
+        if self.hand_tracker and self.hand_tracker.is_running:
+            if self.hand_tracker.update():
+                # 取得食指位置
+                finger_pos = self.hand_tracker.get_index_finger_tip()
+                if finger_pos:
+                    self.drawing_points.append(finger_pos)
 
         # 檢查時間結束
-        if self.etching_elapsed >= self.ETCHING_DURATION:
-            self._finish_etching()
+        if self.drawing_elapsed >= self.DRAWING_DURATION:
+            self._finish_drawing()
 
     def draw(self, screen: pygame.Surface):
         """繪製場景"""
         self._draw_background(screen)
 
-        # 環境粒子
-        self._draw_ambient_particles(screen)
-
-        if self.phase == self.PHASE_INSTRUCTIONS:
+        if self.phase == self.PHASE_LOADING:
+            self._draw_loading(screen)
+        elif self.phase == self.PHASE_INSTRUCTIONS:
             self._draw_instructions(screen)
-        elif self.phase == self.PHASE_ETCHING:
-            self._draw_etching_phase(screen)
+        elif self.phase == self.PHASE_DRAWING:
+            self._draw_drawing_phase(screen)
         elif self.phase == self.PHASE_RESULT:
             self._draw_result(screen)
 
         # 淡入淡出遮罩
         self.draw_fade_overlay(screen)
 
-    def _draw_ambient_particles(self, screen: pygame.Surface):
-        """繪製環境粒子"""
-        for p in self.ambient_particles:
-            surf = pygame.Surface((int(p['size'] * 2), int(p['size'] * 2)), pygame.SRCALPHA)
-            pygame.draw.circle(surf, (*PLASMA_CYAN, p['alpha']),
-                             (int(p['size']), int(p['size'])), int(p['size']))
-            screen.blit(surf, (int(p['x'] - p['size']), int(p['y'] - p['size'])))
-
     def _draw_background(self, screen: pygame.Surface):
-        """繪製漸層背景（使用預繪製的快取）"""
+        """繪製漸層背景"""
         screen.blit(self._bg_surface, (0, 0))
+
+    def _draw_loading(self, screen: pygame.Surface):
+        """繪製載入畫面"""
+        # 標題
+        title = self.title_font.render("蝕刻 - 精準控制", True, WHITE)
+        title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 50))
+        screen.blit(title, title_rect)
+
+        # 載入訊息
+        msg = self.text_font.render(self._loading_message, True, TEXT_SECONDARY)
+        msg_rect = msg.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 20))
+        screen.blit(msg, msg_rect)
 
     def _draw_instructions(self, screen: pygame.Surface):
         """繪製指示畫面"""
-        # 標題（帶光暈）
-        self.draw_title(screen, "蝕刻 - 精準控制", y=50, font=self.title_font)
+        # 標題
+        self.draw_title(screen, "蝕刻 - 精準控制", y=30, font=self.title_font)
 
-        # 晶圓預覽（含目標圖案）
-        self._draw_wafer(screen, show_target=True, show_etched=False)
+        # Webcam 畫面 + 目標疊加
+        self._draw_webcam_with_overlay(screen, show_trail=False)
 
-        # 說明文字
+        # 說明文字（顯示選中的圖形名稱）
+        shape_name = SHAPE_METADATA[self.game.selected_shape_type]["name"]
         instructions = [
-            "傾斜裝置移動蝕刻光束",
-            "搖晃裝置進行蝕刻",
-            "沿著紫色圖案進行蝕刻！"
+            f"用食指對著鏡頭描繪 {shape_name} 圖案",
+            "綠色輪廓是目標圖形",
         ]
 
-        y_start = 480
+        y_start = self.webcam_y + self.WEBCAM_HEIGHT + 15
         for i, text in enumerate(instructions):
             surface = self.text_font.render(text, True, TEXT_SECONDARY)
-            rect = surface.get_rect(center=(SCREEN_WIDTH // 2, y_start + i * 30))
+            rect = surface.get_rect(center=(SCREEN_WIDTH // 2, y_start + i * 28))
             screen.blit(surface, rect)
 
         # 開始按鈕
         self.start_button.draw(screen)
 
-    def _draw_etching_phase(self, screen: pygame.Surface):
-        """繪製蝕刻階段"""
-        # 標題
-        title = self.title_font.render("蝕刻中！", True, WHITE)
-        title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, 40))
+    def _draw_drawing_phase(self, screen: pygame.Surface):
+        """繪製繪圖階段"""
+        # 標題（包含手部偵測提示）
+        if self.hand_tracker and not self.hand_tracker.has_hand():
+            title_text = "請將手放入畫面"
+            title_color = DANGER_COLOR
+        else:
+            title_text = "描繪中！"
+            title_color = WHITE
+
+        title = self.title_font.render(title_text, True, title_color)
+        title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, 30))
         screen.blit(title, title_rect)
 
+        # Webcam 畫面 + 目標 + 軌跡
+        self._draw_webcam_with_overlay(screen, show_trail=True)
+
         # 計時器
-        remaining = max(0, self.ETCHING_DURATION - self.etching_elapsed)
+        remaining = max(0, self.DRAWING_DURATION - self.drawing_elapsed)
         timer_text = f"剩餘時間: {remaining:.1f}s"
         timer_surface = self.text_font.render(timer_text, True, WHITE)
-        timer_rect = timer_surface.get_rect(center=(SCREEN_WIDTH // 2, 100))
+        timer_rect = timer_surface.get_rect(center=(SCREEN_WIDTH // 2, self.webcam_y + self.WEBCAM_HEIGHT + 15))
         screen.blit(timer_surface, timer_rect)
+
+        # 進度條 (使用初始化位置)
         self.timer_bar.draw(screen)
 
-        # 晶圓（含目標和蝕刻進度）
-        self._draw_wafer(screen, show_target=True, show_etched=True)
-
-        # 游標
-        self._draw_cursor(screen)
-
-        # 粒子
-        self._draw_particles(screen)
-
-        # 蝕刻強度
-        intensity_label = f"蝕刻強度: {int(self.current_intensity * 100)}%"
-        intensity_surface = self.small_font.render(intensity_label, True, WHITE)
-        intensity_rect = intensity_surface.get_rect(center=(SCREEN_WIDTH // 2, 525))
-        screen.blit(intensity_surface, intensity_rect)
-        self.intensity_bar.draw(screen)
-
-        # 即時統計
-        coverage, accuracy = self._get_realtime_stats()
-        stats_text = f"覆蓋率: {coverage}%  |  準確率: {accuracy}%"
-        stats_surface = self.small_font.render(stats_text, True, LIGHT_GRAY)
-        stats_rect = stats_surface.get_rect(center=(SCREEN_WIDTH // 2, 580))
-        screen.blit(stats_surface, stats_rect)
-
-        # 提示
-        hint = "傾斜移動 + 搖晃蝕刻"
-        hint_surface = self.small_font.render(hint, True, GRAY)
-        hint_rect = hint_surface.get_rect(center=(SCREEN_WIDTH // 2, 650))
-        screen.blit(hint_surface, hint_rect)
+        # 完成按鈕 (使用初始化位置)
+        self.finish_button.draw(screen)
 
     def _draw_result(self, screen: pygame.Surface):
         """繪製結果畫面"""
         # 標題
-        title = self.title_font.render("蝕刻完成！", True, WHITE)
-        title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, 50))
+        title = self.title_font.render("繪圖完成！", True, WHITE)
+        title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, 30))
         screen.blit(title, title_rect)
 
-        # 完成的晶圓
-        self._draw_wafer(screen, show_target=False, show_etched=True)
+        # 顯示最終繪製結果（靜態）
+        self._draw_final_result(screen)
 
         # 分數顯示
         score_color = SECONDARY_COLOR if self.precision_score >= 70 else ACCENT_COLOR if self.precision_score >= 40 else DANGER_COLOR
-        score_text = f"精準度: {self.precision_score} 分"
+        score_text = f"相似度: {self.precision_score} 分"
         score_surface = self.score_font.render(score_text, True, score_color)
-        score_rect = score_surface.get_rect(center=(SCREEN_WIDTH // 2, 480))
+        score_rect = score_surface.get_rect(center=(SCREEN_WIDTH // 2, self.webcam_y + self.WEBCAM_HEIGHT + 20))
         screen.blit(score_surface, score_rect)
 
         # 詳細分數
         details = [
             f"覆蓋率: {self.coverage_score}%",
-            f"準確率: {self.accuracy_score}%",
-            f"均勻度: {self.uniformity_score}%"
+            f"IoU: {self.iou_score}%",
         ]
 
-        y_start = 530
+        y_start = self.webcam_y + self.WEBCAM_HEIGHT + 60
         for i, text in enumerate(details):
             surface = self.small_font.render(text, True, LIGHT_GRAY)
-            rect = surface.get_rect(center=(SCREEN_WIDTH // 2, y_start + i * 25))
+            rect = surface.get_rect(center=(SCREEN_WIDTH // 2, y_start + i * 22))
             screen.blit(surface, rect)
 
-        # 繼續按鈕
+        # 繼續按鈕 (使用初始化位置)
         self.next_button.draw(screen)
 
-    def _draw_wafer(self, screen: pygame.Surface, show_target: bool, show_etched: bool):
-        """繪製晶圓"""
-        cx, cy = self.wafer_center_x, self.wafer_center_y
-        radius = self.WAFER_RADIUS
+    def _draw_webcam_with_overlay(self, screen: pygame.Surface, show_trail: bool):
+        """繪製 webcam 畫面並疊加目標和軌跡"""
+        if self.hand_tracker is None or not self.hand_tracker.is_running:
+            # 顯示佔位符
+            pygame.draw.rect(screen, DARK_GRAY,
+                           (self.webcam_x, self.webcam_y, self.WEBCAM_WIDTH, self.WEBCAM_HEIGHT))
+            no_cam = self.text_font.render("攝影機未啟動", True, TEXT_MUTED)
+            no_cam_rect = no_cam.get_rect(center=(self.webcam_x + self.WEBCAM_WIDTH // 2,
+                                                   self.webcam_y + self.WEBCAM_HEIGHT // 2))
+            screen.blit(no_cam, no_cam_rect)
+            return
 
-        # 晶圓底座
-        pygame.draw.circle(screen, DARK_GRAY, (cx, cy), radius + 5)
+        # 取得 webcam 畫面
+        frame = self.hand_tracker.get_frame()
+        if frame is None:
+            return
 
-        # 晶圓本體
-        pygame.draw.circle(screen, SILICON_BLUE, (cx, cy), radius)
+        # 繪製手部骨架
+        frame = self.hand_tracker.draw_hand_landmarks(frame)
 
-        # 繪製網格內容
-        cell_size = (radius * 2) / self.GRID_SIZE
+        # 繪製軌跡
+        if show_trail and len(self.drawing_points) > 1:
+            pts = np.array(self.drawing_points, dtype=np.int32)
+            cv2.polylines(frame, [pts], isClosed=False,
+                         color=self.TRAIL_COLOR, thickness=self.TRAIL_THICKNESS)
 
-        for gy in range(self.GRID_SIZE):
-            for gx in range(self.GRID_SIZE):
-                if not self._is_in_wafer_grid(gx, gy):
-                    continue
+            # 繪製當前點
+            if self.drawing_points:
+                last_point = self.drawing_points[-1]
+                cv2.circle(frame, last_point, 10, (0, 255, 255), -1)
 
-                px, py = self._grid_to_pixel(gx, gy)
-                is_target = self.target_grid[gy][gx]
-                etch_depth = self.etched_grid[gy][gx]
+        # 轉換 BGR 到 RGB 並建立 pygame surface
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame_surface = pygame.image.frombuffer(
+            frame_rgb.tobytes(),
+            (self.WEBCAM_WIDTH, self.WEBCAM_HEIGHT),
+            'RGB'
+        )
 
-                # 顯示目標圖案
-                if show_target and is_target and (not show_etched or etch_depth < 0.3):
-                    surf = pygame.Surface((cell_size + 1, cell_size + 1), pygame.SRCALPHA)
-                    surf.fill((*PHOTORESIST_PURPLE, 150))
-                    screen.blit(surf, (px - cell_size / 2, py - cell_size / 2))
+        # 繪製 webcam 畫面
+        screen.blit(frame_surface, (self.webcam_x, self.webcam_y))
 
-                # 顯示已蝕刻區域
-                if show_etched and etch_depth > 0.1:
-                    if is_target:
-                        # 正確蝕刻 - 深色
-                        alpha = int(200 * etch_depth)
-                        color = (30, 60, 100, alpha)
-                    else:
-                        # 過度蝕刻 - 紅色警告
-                        alpha = int(180 * etch_depth)
-                        color = (*DANGER_COLOR, alpha)
-
-                    surf = pygame.Surface((cell_size + 1, cell_size + 1), pygame.SRCALPHA)
-                    surf.fill(color)
-                    screen.blit(surf, (px - cell_size / 2, py - cell_size / 2))
+        # 疊加目標圖形
+        if self._target_overlay:
+            screen.blit(self._target_overlay, (self.webcam_x, self.webcam_y))
 
         # 邊框
-        pygame.draw.circle(screen, WHITE, (cx, cy), radius, 2)
+        pygame.draw.rect(screen, WHITE,
+                        (self.webcam_x - 2, self.webcam_y - 2,
+                         self.WEBCAM_WIDTH + 4, self.WEBCAM_HEIGHT + 4), 2)
 
-    def _draw_cursor(self, screen: pygame.Surface):
-        """繪製蝕刻游標"""
-        cx, cy = int(self.cursor_x), int(self.cursor_y)
+    def _draw_final_result(self, screen: pygame.Surface):
+        """繪製最終結果比較圖"""
+        if self.scorer is None:
+            return
 
-        # 發光效果
-        if self.cursor_glow > 0:
-            glow_radius = int(20 + self.cursor_glow * 15)
-            for i in range(5, 0, -1):
-                alpha = int(30 * self.cursor_glow * (6 - i) / 5)
-                r = glow_radius + i * 5
-                surf = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
-                pygame.draw.circle(surf, (*ACCENT_COLOR, alpha), (r, r), r)
-                screen.blit(surf, (cx - r, cy - r))
+        # 建立結果圖像
+        result_img = np.zeros((self.WEBCAM_HEIGHT, self.WEBCAM_WIDTH, 3), dtype=np.uint8)
+        result_img[:] = (40, 40, 40)  # 深灰背景
 
-        # 游標核心
-        pulse = 0.8 + 0.2 * math.sin(self.pulse_animation)
-        core_radius = int(8 * pulse)
+        # 繪製目標圖形（綠色）
+        target_img = self.scorer._target_image
+        if target_img is not None:
+            target_mask = target_img > 0
+            result_img[target_mask] = (0, 150, 0)  # 深綠色
 
-        if self.current_intensity > 0:
-            # 蝕刻中 - 亮黃色
-            pygame.draw.circle(screen, ACCENT_COLOR, (cx, cy), core_radius + 2)
-            pygame.draw.circle(screen, WHITE, (cx, cy), core_radius)
-        else:
-            # 待機 - 藍色
-            pygame.draw.circle(screen, PRIMARY_COLOR, (cx, cy), core_radius + 2)
-            pygame.draw.circle(screen, LIGHT_GRAY, (cx, cy), core_radius)
+        # 繪製用戶軌跡（青色）
+        if len(self.drawing_points) > 1:
+            pts = np.array(self.drawing_points, dtype=np.int32)
+            cv2.polylines(result_img, [pts], isClosed=False,
+                         color=(255, 255, 0), thickness=self.TRAIL_THICKNESS)
 
-        # 方向指示
-        vx, vy = self._get_cursor_velocity()
-        if abs(vx) > 10 or abs(vy) > 10:
-            length = 25
-            mag = math.sqrt(vx * vx + vy * vy)
-            if mag > 0:
-                end_x = cx + int((vx / mag) * length)
-                end_y = cy + int((vy / mag) * length)
-                pygame.draw.line(screen, WHITE, (cx, cy), (end_x, end_y), 2)
+        # 轉換為 pygame surface
+        result_rgb = cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB)
+        result_surface = pygame.image.frombuffer(
+            result_rgb.tobytes(),
+            (self.WEBCAM_WIDTH, self.WEBCAM_HEIGHT),
+            'RGB'
+        )
 
-    def _draw_particles(self, screen: pygame.Surface):
-        """繪製電漿粒子"""
-        for p in self.plasma_particles:
-            alpha = int(255 * (p["life"] / p["max_life"]))
-            size = int(3 * (p["life"] / p["max_life"]))
-            if size > 0:
-                surf = pygame.Surface((size * 2, size * 2), pygame.SRCALPHA)
-                color = (*ACCENT_COLOR, alpha)
-                pygame.draw.circle(surf, color, (size, size), size)
-                screen.blit(surf, (int(p["x"]) - size, int(p["y"]) - size))
+        screen.blit(result_surface, (self.webcam_x, self.webcam_y))
 
-    def _get_realtime_stats(self) -> tuple:
-        """取得即時統計"""
-        target_count = 0
-        etched_on_target = 0
-        etched_off_target = 0
+        # 邊框
+        pygame.draw.rect(screen, WHITE,
+                        (self.webcam_x - 2, self.webcam_y - 2,
+                         self.WEBCAM_WIDTH + 4, self.WEBCAM_HEIGHT + 4), 2)
 
-        for y in range(self.GRID_SIZE):
-            for x in range(self.GRID_SIZE):
-                if not self._is_in_wafer_grid(x, y):
-                    continue
+        # 圖例
+        legend_y = self.webcam_y - 25
+        pygame.draw.rect(screen, (0, 150, 0), (self.webcam_x, legend_y, 15, 15))
+        legend1 = self.small_font.render("目標", True, TEXT_SECONDARY)
+        screen.blit(legend1, (self.webcam_x + 20, legend_y - 2))
 
-                is_target = self.target_grid[y][x]
-                etch_depth = self.etched_grid[y][x]
-
-                if is_target:
-                    target_count += 1
-                    if etch_depth > 0.3:
-                        etched_on_target += 1
-                else:
-                    if etch_depth > 0.3:
-                        etched_off_target += 1
-
-        coverage = int(100 * etched_on_target / target_count) if target_count > 0 else 0
-        total_etched = etched_on_target + etched_off_target
-        accuracy = int(100 * etched_on_target / total_etched) if total_etched > 0 else 100
-
-        return coverage, accuracy
+        pygame.draw.rect(screen, (0, 255, 255), (self.webcam_x + 80, legend_y, 15, 15))
+        legend2 = self.small_font.render("你的繪製", True, TEXT_SECONDARY)
+        screen.blit(legend2, (self.webcam_x + 100, legend_y - 2))

@@ -19,6 +19,7 @@ from .scenes.stage1_material import MaterialStage
 from .scenes.stage2_deposition import DepositionStage
 from .scenes.stage3_exposure import ExposureStage
 from .scenes.stage4_etching import EtchingStage
+from .utils.cv_scoring import ShapeType
 from sensor.bboni_ble import BboniSensor
 
 
@@ -49,6 +50,9 @@ class Game:
             "exposure": 0,
             "precision": 0,
         }
+
+        # 選擇的圖形類型（在第三關選擇，第三、四關共用）
+        self.selected_shape_type = ShapeType.TRANSISTOR
 
         # 場景管理
         self.scenes = {
