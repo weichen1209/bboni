@@ -6,6 +6,7 @@
 
 import pygame
 import math
+import random
 from .base import Scene, Button, ProgressBar
 from ..config import *
 from ..utils.cv_scoring import CircleSimilarityScorer
@@ -99,19 +100,26 @@ class DepositionStage(Scene):
 
     def on_enter(self):
         """進入場景"""
-        self.title_font = pygame.font.SysFont("Microsoft JhengHei", 36)
+        super().on_enter()
+        self.title_font = pygame.font.SysFont("Microsoft JhengHei", 42)
         self.text_font = pygame.font.SysFont("Microsoft JhengHei", 24)
         self.small_font = pygame.font.SysFont("Microsoft JhengHei", 18)
         self.score_font = pygame.font.SysFont("Microsoft JhengHei", 48)
 
-        # 預繪製漸層背景（效能優化）
-        self._bg_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-        for y in range(SCREEN_HEIGHT):
-            ratio = y / SCREEN_HEIGHT
-            r = int(20 + (SILICON_BLUE[0] - 20) * ratio * 0.2)
-            g = int(25 + (SILICON_BLUE[1] - 25) * ratio * 0.2)
-            b = int(40 + (SILICON_BLUE[2] - 40) * ratio * 0.3)
-            pygame.draw.line(self._bg_surface, (r, g, b), (0, y), (SCREEN_WIDTH, y))
+        # 預繪製增強版漸層背景
+        self._bg_surface = self.create_enhanced_background(SILICON_BLUE, add_vignette=True, add_grid=False)
+
+        # 初始化環境粒子
+        self.ambient_particles = []
+        for _ in range(25):
+            self.ambient_particles.append({
+                'x': random.randint(0, SCREEN_WIDTH),
+                'y': random.randint(0, SCREEN_HEIGHT),
+                'vx': random.uniform(-8, 8),
+                'vy': random.uniform(-15, -3),
+                'size': random.uniform(1, 2.5),
+                'alpha': random.randint(15, 40)
+            })
 
         # 重置狀態
         self.phase = self.PHASE_INSTRUCTIONS
@@ -125,6 +133,9 @@ class DepositionStage(Scene):
         self.similarity_score = 0
         self.spray_particles = []
         self.drawing_elapsed = 0.0
+
+        # 動畫狀態
+        self.glow_phase = 0.0
 
         # 初始化 OpenCV 評分器
         self.cv_scorer = CircleSimilarityScorer(
@@ -200,8 +211,23 @@ class DepositionStage(Scene):
 
     def update(self, dt: float):
         """更新遊戲邏輯"""
+        # 更新淡入淡出
+        self.update_fade(dt)
+
         # 更新動畫
         self.dash_offset += dt * 50
+        self.glow_phase += dt * 3
+
+        # 更新按鈕動畫
+        self.start_button.update(dt)
+        self.next_button.update(dt)
+
+        # 更新進度條動畫
+        self.progress_bar.update(dt)
+        self.timer_bar.update(dt)
+
+        # 更新環境粒子
+        self._update_ambient_particles(dt)
 
         if self.phase == self.PHASE_INSTRUCTIONS:
             pass  # 等待使用者開始
@@ -209,6 +235,19 @@ class DepositionStage(Scene):
             self._update_drawing_phase(dt)
         elif self.phase == self.PHASE_RESULT:
             self._update_result_phase(dt)
+
+    def _update_ambient_particles(self, dt: float):
+        """更新環境粒子"""
+        for p in self.ambient_particles:
+            p['x'] += p['vx'] * dt
+            p['y'] += p['vy'] * dt
+            if p['y'] < -10:
+                p['y'] = SCREEN_HEIGHT + 10
+                p['x'] = random.randint(0, SCREEN_WIDTH)
+            if p['x'] < -10:
+                p['x'] = SCREEN_WIDTH + 10
+            elif p['x'] > SCREEN_WIDTH + 10:
+                p['x'] = -10
 
     def _update_drawing_phase(self, dt: float):
         """繪製階段更新"""
@@ -437,6 +476,9 @@ class DepositionStage(Scene):
         """繪製場景"""
         self._draw_background(screen)
 
+        # 環境粒子
+        self._draw_ambient_particles(screen)
+
         if self.phase == self.PHASE_INSTRUCTIONS:
             self._draw_instructions(screen)
         elif self.phase == self.PHASE_DRAWING:
@@ -444,16 +486,25 @@ class DepositionStage(Scene):
         elif self.phase == self.PHASE_RESULT:
             self._draw_result(screen)
 
+        # 淡入淡出遮罩
+        self.draw_fade_overlay(screen)
+
+    def _draw_ambient_particles(self, screen: pygame.Surface):
+        """繪製環境粒子"""
+        for p in self.ambient_particles:
+            surf = pygame.Surface((int(p['size'] * 2), int(p['size'] * 2)), pygame.SRCALPHA)
+            pygame.draw.circle(surf, (200, 220, 255, p['alpha']),
+                             (int(p['size']), int(p['size'])), int(p['size']))
+            screen.blit(surf, (int(p['x'] - p['size']), int(p['y'] - p['size'])))
+
     def _draw_background(self, screen: pygame.Surface):
         """繪製漸層背景（使用預繪製的快取）"""
         screen.blit(self._bg_surface, (0, 0))
 
     def _draw_instructions(self, screen: pygame.Surface):
         """繪製指示畫面"""
-        # 標題
-        title = self.title_font.render("薄膜沉積 - 畫出圓形", True, WHITE)
-        title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, 80))
-        screen.blit(title, title_rect)
+        # 標題（帶光暈）
+        self.draw_title(screen, "薄膜沉積 - 畫出圓形", y=80, font=self.title_font)
 
         # 目標圓（預覽）
         self._draw_target_circle(screen)
@@ -467,7 +518,7 @@ class DepositionStage(Scene):
 
         y_start = 450
         for i, text in enumerate(instructions):
-            surface = self.text_font.render(text, True, LIGHT_GRAY)
+            surface = self.text_font.render(text, True, TEXT_SECONDARY)
             rect = surface.get_rect(center=(SCREEN_WIDTH // 2, y_start + i * 35))
             screen.blit(surface, rect)
 
@@ -476,15 +527,18 @@ class DepositionStage(Scene):
 
     def _draw_drawing_phase(self, screen: pygame.Surface):
         """繪製繪畫階段"""
-        # 標題
-        title = self.title_font.render("薄膜沉積 - 畫出圓形", True, WHITE)
-        title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, 40))
-        screen.blit(title, title_rect)
+        # 標題（帶光暈）
+        self.draw_title(screen, "薄膜沉積 - 畫出圓形", y=40, font=self.title_font)
 
         # 計時器
         self.timer_bar.draw(screen)
         remaining = max(0, self.drawing_time_limit - self.drawing_elapsed)
-        timer_color = DANGER_COLOR if remaining < 2 else ACCENT_COLOR
+        if remaining < 5:
+            timer_color = DANGER_COLOR
+        elif remaining < 10:
+            timer_color = ACCENT_COLOR
+        else:
+            timer_color = TEXT_HIGHLIGHT
         timer_text = f"剩餘時間: {remaining:.1f}s"
         timer_surface = self.text_font.render(timer_text, True, timer_color)
         timer_rect = timer_surface.get_rect(center=(SCREEN_WIDTH // 2, 100))
@@ -504,7 +558,7 @@ class DepositionStage(Scene):
 
         # 提示文字
         hint = "傾斜裝置移動游標！"
-        hint_surface = self.text_font.render(hint, True, LIGHT_GRAY)
+        hint_surface = self.text_font.render(hint, True, TEXT_SECONDARY)
         hint_rect = hint_surface.get_rect(center=(SCREEN_WIDTH // 2, 620))
         screen.blit(hint_surface, hint_rect)
 
@@ -514,10 +568,15 @@ class DepositionStage(Scene):
         finish_rect = finish_surface.get_rect(center=(SCREEN_WIDTH // 2, 660))
         screen.blit(finish_surface, finish_rect)
 
-        # 點數顯示
+        # 點數顯示（帶背景面板）
         points_text = f"軌跡點數: {len(self.drawn_points)}"
-        points_surface = self.small_font.render(points_text, True, LIGHT_GRAY)
-        screen.blit(points_surface, (20, 20))
+        points_surface = self.small_font.render(points_text, True, TEXT_SECONDARY)
+        # 背景
+        bg_rect = points_surface.get_rect(topleft=(20, 20)).inflate(16, 8)
+        bg_surf = pygame.Surface((bg_rect.width, bg_rect.height), pygame.SRCALPHA)
+        pygame.draw.rect(bg_surf, (*BG_DARK, 180), (0, 0, bg_rect.width, bg_rect.height), border_radius=5)
+        screen.blit(bg_surf, bg_rect.topleft)
+        screen.blit(points_surface, (28, 24))
 
     def _draw_result(self, screen: pygame.Surface):
         """繪製結果畫面"""

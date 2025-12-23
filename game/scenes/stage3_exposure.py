@@ -6,6 +6,7 @@
 
 import pygame
 import math
+import random
 from collections import deque
 from .base import Scene, Button, ProgressBar
 from ..config import *
@@ -21,7 +22,7 @@ class ExposureStage(Scene):
 
     # 曝光參數
     EXPOSURE_DURATION = 10.0      # 最長曝光時間 (秒)
-    STABILITY_THRESHOLD = 0.85    # 穩定閾值 (低於此值顯示警告，非常嚴格)
+    STABILITY_THRESHOLD = 0.6     # 穩定閾值 (低於此值顯示警告，已放寬)
     FILL_SPEED_STABLE = 0.15      # 穩定時進度填充速度
     FILL_SPEED_UNSTABLE = 0.02    # 不穩定時進度填充速度
 
@@ -41,6 +42,9 @@ class ExposureStage(Scene):
         self.uv_pulse = 0.0              # UV 光脈動動畫
         self.warning_flash = 0.0         # 警告閃爍
         self.particle_angle = 0.0
+
+        # 穩定度平滑處理
+        self._stability_history = []
 
         # 分數
         self.exposure_score = 0
@@ -76,19 +80,26 @@ class ExposureStage(Scene):
 
     def on_enter(self):
         """進入場景"""
-        self.title_font = pygame.font.SysFont("Microsoft JhengHei", 36)
+        super().on_enter()
+        self.title_font = pygame.font.SysFont("Microsoft JhengHei", 42)
         self.text_font = pygame.font.SysFont("Microsoft JhengHei", 24)
         self.small_font = pygame.font.SysFont("Microsoft JhengHei", 18)
         self.score_font = pygame.font.SysFont("Microsoft JhengHei", 48)
 
-        # 預繪製漸層背景（效能優化）
-        self._bg_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-        for y in range(SCREEN_HEIGHT):
-            ratio = y / SCREEN_HEIGHT
-            r = int(20 + (PHOTORESIST_PURPLE[0] - 20) * ratio * 0.15)
-            g = int(10 + ratio * 10)
-            b = int(40 + (PHOTORESIST_PURPLE[2] - 40) * ratio * 0.2)
-            pygame.draw.line(self._bg_surface, (r, g, b), (0, y), (SCREEN_WIDTH, y))
+        # 預繪製增強版漸層背景（暗紫色調）
+        self._bg_surface = self.create_enhanced_background(UV_PURPLE, add_vignette=True, add_grid=False)
+
+        # 環境粒子（UV光粒子）
+        self.ambient_particles = []
+        for _ in range(20):
+            self.ambient_particles.append({
+                'x': random.randint(0, SCREEN_WIDTH),
+                'y': random.randint(0, SCREEN_HEIGHT),
+                'vx': random.uniform(-5, 5),
+                'vy': random.uniform(-10, -2),
+                'size': random.uniform(1, 2),
+                'alpha': random.randint(20, 50)
+            })
 
         # 重置狀態
         self.phase = self.PHASE_INSTRUCTIONS
@@ -99,6 +110,7 @@ class ExposureStage(Scene):
         self.exposure_score = 0
         self.uv_pulse = 0.0
         self.warning_flash = 0.0
+        self._stability_history = []  # 重置穩定度歷史
 
     def handle_event(self, event: pygame.event.Event):
         """處理事件"""
@@ -158,7 +170,7 @@ class ExposureStage(Scene):
             self.switch_to("result")
 
     def _get_stability(self) -> float:
-        """取得穩定度（使用3軸加速度計算整體穩定性）"""
+        """取得穩定度（使用3軸加速度計算整體穩定性，含平滑處理）"""
         if self.game.sensor and self.game.sensor.is_connected:
             # 使用原始資料（包含重力分量，靜止時向量大小約 2048）
             data = self.game.sensor.get_raw_imu_data()
@@ -167,9 +179,14 @@ class ExposureStage(Scene):
             # 靜止時 total_accel 約為 2048 (1g)
             # 計算偏離靜止狀態的程度
             deviation = abs(total_accel - 2048) / 2048.0
-            # 當偏離超過 0.3g 時穩定度趨近 0
-            stability = max(0.0, 1.0 - deviation / 0.3)
-            return stability
+            # 放寬容忍度到 0.8g，使平放時更容易達到 100%
+            raw_stability = max(0.0, 1.0 - deviation / 0.8)
+
+            # 使用移動平均平滑化（最近 5 個樣本），避免噪音波動
+            self._stability_history.append(raw_stability)
+            if len(self._stability_history) > 5:
+                self._stability_history.pop(0)
+            return sum(self._stability_history) / len(self._stability_history)
         return 1.0  # 裝置未連接時視為穩定
 
     def _calculate_score(self) -> int:
@@ -195,9 +212,23 @@ class ExposureStage(Scene):
 
     def update(self, dt: float):
         """更新遊戲邏輯"""
+        # 更新淡入淡出
+        self.update_fade(dt)
+
         # 更新動畫
         self.uv_pulse += dt * 5
         self.particle_angle += dt * 30
+
+        # 更新按鈕動畫
+        self.start_button.update(dt)
+        self.next_button.update(dt)
+
+        # 更新進度條動畫
+        self.progress_bar.update(dt)
+        self.stability_bar.update(dt)
+
+        # 更新環境粒子
+        self._update_ambient_particles(dt)
 
         if self.phase == self.PHASE_INSTRUCTIONS:
             pass  # 等待使用者開始
@@ -205,6 +236,19 @@ class ExposureStage(Scene):
             self._update_exposure_phase(dt)
         elif self.phase == self.PHASE_RESULT:
             pass
+
+    def _update_ambient_particles(self, dt: float):
+        """更新環境粒子"""
+        for p in self.ambient_particles:
+            p['x'] += p['vx'] * dt
+            p['y'] += p['vy'] * dt
+            if p['y'] < -10:
+                p['y'] = SCREEN_HEIGHT + 10
+                p['x'] = random.randint(0, SCREEN_WIDTH)
+            if p['x'] < -10:
+                p['x'] = SCREEN_WIDTH + 10
+            elif p['x'] > SCREEN_WIDTH + 10:
+                p['x'] = -10
 
     def _update_exposure_phase(self, dt: float):
         """曝光階段更新"""
@@ -237,6 +281,9 @@ class ExposureStage(Scene):
         """繪製場景"""
         self._draw_background(screen)
 
+        # 環境粒子
+        self._draw_ambient_particles(screen)
+
         if self.phase == self.PHASE_INSTRUCTIONS:
             self._draw_instructions(screen)
         elif self.phase == self.PHASE_EXPOSURE:
@@ -244,16 +291,25 @@ class ExposureStage(Scene):
         elif self.phase == self.PHASE_RESULT:
             self._draw_result(screen)
 
+        # 淡入淡出遮罩
+        self.draw_fade_overlay(screen)
+
+    def _draw_ambient_particles(self, screen: pygame.Surface):
+        """繪製環境粒子"""
+        for p in self.ambient_particles:
+            surf = pygame.Surface((int(p['size'] * 2), int(p['size'] * 2)), pygame.SRCALPHA)
+            pygame.draw.circle(surf, (*UV_PURPLE_GLOW, p['alpha']),
+                             (int(p['size']), int(p['size'])), int(p['size']))
+            screen.blit(surf, (int(p['x'] - p['size']), int(p['y'] - p['size'])))
+
     def _draw_background(self, screen: pygame.Surface):
         """繪製漸層背景（使用預繪製的快取）"""
         screen.blit(self._bg_surface, (0, 0))
 
     def _draw_instructions(self, screen: pygame.Surface):
         """繪製指示畫面"""
-        # 標題
-        title = self.title_font.render("曝光顯影 - 保持穩定", True, WHITE)
-        title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, 80))
-        screen.blit(title, title_rect)
+        # 標題（帶光暈）
+        self.draw_title(screen, "曝光顯影 - 保持穩定", y=80, font=self.title_font)
 
         # 晶圓預覽
         self._draw_wafer_preview(screen, SCREEN_WIDTH // 2, 280)
@@ -267,7 +323,7 @@ class ExposureStage(Scene):
 
         y_start = 420
         for i, text in enumerate(instructions):
-            surface = self.text_font.render(text, True, LIGHT_GRAY)
+            surface = self.text_font.render(text, True, TEXT_SECONDARY)
             rect = surface.get_rect(center=(SCREEN_WIDTH // 2, y_start + i * 35))
             screen.blit(surface, rect)
 

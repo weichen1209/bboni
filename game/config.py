@@ -17,8 +17,20 @@ GRAY = (128, 128, 128)
 LIGHT_GRAY = (200, 200, 200)
 DARK_GRAY = (64, 64, 64)
 
+# ==================== 新增：背景色系 ====================
+BG_DARK = (12, 15, 25)              # 最深背景
+BG_MEDIUM = (20, 28, 45)            # 面板背景
+BG_LIGHT = (35, 45, 65)             # 浮起表面
+BG_SURFACE = (45, 55, 80)           # 卡片、按鈕
+
+# ==================== 新增：文字色系 ====================
+TEXT_PRIMARY = (255, 255, 255)      # 主要文字
+TEXT_SECONDARY = (180, 190, 210)    # 次要文字
+TEXT_MUTED = (120, 130, 150)        # 提示文字
+TEXT_HIGHLIGHT = (100, 220, 255)    # 高亮文字
+
 # 半導體相關顏色
-SILICON_BLUE = (70, 130, 180)      # 矽晶圓
+SILICON_BLUE = (70, 130, 180)       # 矽晶圓
 POLYSILICON_GRAY = (105, 105, 105)  # 多晶矽
 SAND_YELLOW = (237, 201, 175)       # 沙子
 PHOTORESIST_PURPLE = (148, 0, 211)  # 光阻
@@ -32,11 +44,37 @@ WAFER_RAINBOW = [                   # 晶圓彩虹色
     (148, 0, 211),
 ]
 
+# ==================== 新增：特效顏色 ====================
+UV_PURPLE = (138, 43, 226)          # UV曝光
+UV_PURPLE_GLOW = (180, 100, 255)    # UV光暈
+PLASMA_CYAN = (0, 255, 255)         # 電漿/蝕刻
+PLASMA_CYAN_DARK = (0, 180, 200)    # 電漿暗色
+GLOW_BLUE = (85, 175, 235)          # 藍色光暈
+GLOW_GREEN = (100, 255, 170)        # 綠色光暈
+GOLD_BRIGHT = (255, 215, 60)        # 亮金色
+
 # 主題色
 PRIMARY_COLOR = (52, 152, 219)      # 主色調 (藍)
+PRIMARY_LIGHT = (85, 175, 235)      # 主色調亮
+PRIMARY_DARK = (35, 120, 180)       # 主色調暗
 SECONDARY_COLOR = (46, 204, 113)    # 輔助色 (綠)
+SECONDARY_LIGHT = (80, 230, 140)    # 輔助色亮
 ACCENT_COLOR = (241, 196, 15)       # 強調色 (黃)
+ACCENT_LIGHT = (255, 215, 60)       # 強調色亮
 DANGER_COLOR = (231, 76, 60)        # 警告色 (紅)
+DANGER_DARK = (180, 50, 40)         # 警告色暗
+
+# ==================== 動畫常數 ====================
+ANIMATION_FAST = 0.15               # 快速動畫 (按鈕hover)
+ANIMATION_NORMAL = 0.3              # 一般動畫
+ANIMATION_SLOW = 0.5                # 慢速動畫 (場景過渡)
+ANIMATION_VERY_SLOW = 0.8           # 超慢動畫
+
+# ==================== UI 常數 ====================
+BUTTON_CORNER_RADIUS = 12           # 按鈕圓角
+BUTTON_SHADOW_OFFSET = (3, 3)       # 按鈕陰影偏移
+PROGRESSBAR_CORNER_RADIUS = 8       # 進度條圓角
+PANEL_CORNER_RADIUS = 15            # 面板圓角
 
 # bboni AI 設定
 BBONI_ADDRESS = "E1:91:DC:E7:D5:61"

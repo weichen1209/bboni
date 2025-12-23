@@ -74,6 +74,9 @@ class CalibrationScene(Scene):
 
     def update(self, dt: float):
         """更新"""
+        # 更新進度條動畫
+        self.progress_bar.update(dt)
+
         if self.state == "calibrating":
             elapsed = time.time() - self.calibration_start_time
             total_time = CALIBRATION_SAMPLES * CALIBRATION_DELAY + 1.0

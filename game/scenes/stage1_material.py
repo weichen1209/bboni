@@ -5,6 +5,7 @@
 
 import pygame
 import math
+import random
 from .base import Scene, Button, ProgressBar
 from ..config import *
 
@@ -39,14 +40,16 @@ class MaterialStage(Scene):
         # 動畫
         self.particle_angle = 0     # 粒子旋轉角度
         self.glow_intensity = 0     # 發光強度
+        self.heat_wave_phase = 0    # 熱浪效果相位
+        self.ambient_particles = [] # 環境粒子
 
         # UI 元件
         center_x = SCREEN_WIDTH // 2
         self.progress_bar = ProgressBar(
             center_x - 250, 520, 500, 35,
-            bg_color=DARK_GRAY,
+            bg_color=BG_DARK,
             fill_color=ACCENT_COLOR,
-            border_color=GRAY
+            border_color=BG_LIGHT
         )
 
         self.next_button = Button(
@@ -61,22 +64,29 @@ class MaterialStage(Scene):
 
     def on_enter(self):
         """進入場景"""
-        self.title_font = pygame.font.SysFont("Microsoft JhengHei", 36)
+        super().on_enter()
+        self.title_font = pygame.font.SysFont("Microsoft JhengHei", 42)
         self.text_font = pygame.font.SysFont("Microsoft JhengHei", 24)
         self.small_font = pygame.font.SysFont("Microsoft JhengHei", 18)
 
-        # 預繪製所有階段的漸層背景（效能優化）
+        # 預繪製所有階段的增強版漸層背景
         self._bg_surfaces = []
         for stage in self.STAGES:
             color = stage["color"]
-            surf = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-            for y in range(SCREEN_HEIGHT):
-                ratio = y / SCREEN_HEIGHT
-                r = int(20 + (color[0] - 20) * ratio * 0.3)
-                g = int(25 + (color[1] - 25) * ratio * 0.3)
-                b = int(40 + (color[2] - 40) * ratio * 0.3)
-                pygame.draw.line(surf, (r, g, b), (0, y), (SCREEN_WIDTH, y))
+            surf = self.create_enhanced_background(color, add_vignette=True, add_grid=True)
             self._bg_surfaces.append(surf)
+
+        # 初始化環境粒子
+        self.ambient_particles = []
+        for _ in range(30):
+            self.ambient_particles.append({
+                'x': random.randint(0, SCREEN_WIDTH),
+                'y': random.randint(0, SCREEN_HEIGHT),
+                'vx': random.uniform(-10, 10),
+                'vy': random.uniform(-20, -5),
+                'size': random.uniform(1, 3),
+                'alpha': random.randint(20, 60)
+            })
 
         # 重置狀態
         self.current_stage = 0
@@ -128,6 +138,7 @@ class MaterialStage(Scene):
         # 清空樣本，重置能量
         self.shake_samples = []
         self.energy = 0.0
+        self.progress_bar.reset()  # 立即重置進度條（無動畫）
         self.current_stage += 1
 
         # 檢查是否完成所有階段
@@ -148,6 +159,21 @@ class MaterialStage(Scene):
 
     def update(self, dt: float):
         """更新遊戲邏輯"""
+        # 更新淡入淡出
+        self.update_fade(dt)
+
+        # 更新按鈕動畫
+        self.next_button.update(dt)
+
+        # 更新進度條動畫
+        self.progress_bar.update(dt)
+
+        # 更新環境粒子
+        self._update_ambient_particles(dt)
+
+        # 更新熱浪相位
+        self.heat_wave_phase += dt * 2
+
         if self.is_complete:
             return
 
@@ -175,20 +201,35 @@ class MaterialStage(Scene):
         if self.energy >= 1.0:
             self._advance_stage()
 
+    def _update_ambient_particles(self, dt: float):
+        """更新環境粒子"""
+        for p in self.ambient_particles:
+            p['x'] += p['vx'] * dt
+            p['y'] += p['vy'] * dt
+
+            # 循環
+            if p['y'] < -10:
+                p['y'] = SCREEN_HEIGHT + 10
+                p['x'] = random.randint(0, SCREEN_WIDTH)
+            if p['x'] < -10:
+                p['x'] = SCREEN_WIDTH + 10
+            elif p['x'] > SCREEN_WIDTH + 10:
+                p['x'] = -10
+
     def draw(self, screen: pygame.Surface):
         """繪製場景"""
         # 漸層背景
         self._draw_background(screen)
 
-        # 標題
+        # 環境粒子
+        self._draw_ambient_particles(screen)
+
+        # 標題（帶光暈）
         stage_name = self.STAGES[self.current_stage]["name"]
         title_text = f"準備材料 - {stage_name}"
         if self.is_complete:
             title_text = "材料準備完成！"
-
-        title_surface = self.title_font.render(title_text, True, WHITE)
-        title_rect = title_surface.get_rect(center=(SCREEN_WIDTH // 2, 50))
-        screen.blit(title_surface, title_rect)
+        self.draw_title(screen, title_text, y=50, font=self.title_font)
 
         # 階段指示器
         self._draw_stage_indicators(screen)
@@ -199,22 +240,33 @@ class MaterialStage(Scene):
         # 提示文字
         if not self.is_complete:
             hint = "搖晃裝置來轉化材料！"
-            hint_surface = self.text_font.render(hint, True, LIGHT_GRAY)
+            hint_surface = self.text_font.render(hint, True, TEXT_SECONDARY)
             hint_rect = hint_surface.get_rect(center=(SCREEN_WIDTH // 2, 470))
             screen.blit(hint_surface, hint_rect)
 
             # 進度條
             self.progress_bar.draw(screen)
 
-            # 能量百分比
+            # 能量百分比（帶發光效果）
             percent_text = f"{int(self.energy * 100)}%"
-            percent_surface = self.text_font.render(percent_text, True, WHITE)
+            if self.energy > 0.8:
+                percent_color = ACCENT_LIGHT
+            else:
+                percent_color = WHITE
+            percent_surface = self.text_font.render(percent_text, True, percent_color)
             percent_rect = percent_surface.get_rect(center=(SCREEN_WIDTH // 2, 580))
             screen.blit(percent_surface, percent_rect)
 
         else:
-            # 顯示分數
+            # 顯示分數（帶動畫效果）
             avg_score = sum(self.stage_scores) / len(self.stage_scores) if self.stage_scores else 0
+
+            # 分數光暈
+            glow_surf = pygame.Surface((300, 60), pygame.SRCALPHA)
+            glow_alpha = int(30 + 20 * math.sin(self.heat_wave_phase * 2))
+            pygame.draw.ellipse(glow_surf, (*SECONDARY_COLOR, glow_alpha), (0, 0, 300, 60))
+            screen.blit(glow_surf, (SCREEN_WIDTH // 2 - 150, 500))
+
             score_text = f"純度評分: {int(avg_score)} 分"
             score_surface = self.title_font.render(score_text, True, SECONDARY_COLOR)
             score_rect = score_surface.get_rect(center=(SCREEN_WIDTH // 2, 520))
@@ -223,40 +275,116 @@ class MaterialStage(Scene):
             # 繼續按鈕
             self.next_button.draw(screen)
 
+        # 淡入淡出遮罩
+        self.draw_fade_overlay(screen)
+
+    def _draw_ambient_particles(self, screen: pygame.Surface):
+        """繪製環境粒子"""
+        for p in self.ambient_particles:
+            surf = pygame.Surface((int(p['size'] * 2), int(p['size'] * 2)), pygame.SRCALPHA)
+            pygame.draw.circle(surf, (255, 255, 255, p['alpha']),
+                             (int(p['size']), int(p['size'])), int(p['size']))
+            screen.blit(surf, (int(p['x'] - p['size']), int(p['y'] - p['size'])))
+
     def _draw_background(self, screen: pygame.Surface):
         """繪製漸層背景（使用預繪製的快取）"""
         screen.blit(self._bg_surfaces[self.current_stage], (0, 0))
 
     def _draw_stage_indicators(self, screen: pygame.Surface):
-        """繪製階段進度指示器"""
+        """繪製增強版階段進度指示器"""
         center_x = SCREEN_WIDTH // 2
-        y = 100
-        spacing = 80
+        y = 110
+        spacing = 100
         start_x = center_x - (len(self.STAGES) - 1) * spacing // 2
+        node_radius = 16
 
         for i, stage in enumerate(self.STAGES):
             x = start_x + i * spacing
 
-            # 圓點
-            if i < self.current_stage:
-                color = SECONDARY_COLOR  # 已完成
-            elif i == self.current_stage:
-                color = ACCENT_COLOR     # 當前
-            else:
-                color = GRAY             # 未完成
+            # 連接線（先繪製在節點下方）
+            if i < len(self.STAGES) - 1:
+                line_start_x = x + node_radius + 5
+                line_end_x = x + spacing - node_radius - 5
+                if i < self.current_stage:
+                    # 已完成 - 漸層綠色
+                    for lx in range(line_start_x, line_end_x):
+                        t = (lx - line_start_x) / max(1, line_end_x - line_start_x)
+                        r = int(SECONDARY_COLOR[0] + (GLOW_GREEN[0] - SECONDARY_COLOR[0]) * t)
+                        g = int(SECONDARY_COLOR[1] + (GLOW_GREEN[1] - SECONDARY_COLOR[1]) * t)
+                        b = int(SECONDARY_COLOR[2] + (GLOW_GREEN[2] - SECONDARY_COLOR[2]) * t)
+                        pygame.draw.line(screen, (r, g, b), (lx, y), (lx + 1, y), 3)
+                else:
+                    # 未完成 - 虛線
+                    dash_length = 8
+                    for lx in range(line_start_x, line_end_x, dash_length * 2):
+                        end_x = min(lx + dash_length, line_end_x)
+                        pygame.draw.line(screen, DARK_GRAY, (lx, y), (end_x, y), 2)
 
-            pygame.draw.circle(screen, color, (x, y), 12)
-            pygame.draw.circle(screen, WHITE, (x, y), 12, 2)
+            # 節點
+            if i < self.current_stage:
+                # 已完成 - 綠色帶勾
+                # 光暈
+                glow_surf = pygame.Surface((node_radius * 3, node_radius * 3), pygame.SRCALPHA)
+                pygame.draw.circle(glow_surf, (*GLOW_GREEN, 40),
+                                 (node_radius * 1.5, node_radius * 1.5), node_radius + 5)
+                screen.blit(glow_surf, (x - node_radius * 1.5, y - node_radius * 1.5))
+
+                pygame.draw.circle(screen, SECONDARY_COLOR, (x, y), node_radius)
+                pygame.draw.circle(screen, WHITE, (x, y), node_radius, 2)
+
+                # 勾選
+                check_size = int(node_radius * 0.5)
+                points = [
+                    (x - check_size, y),
+                    (x - check_size // 3, y + check_size * 0.6),
+                    (x + check_size, y - check_size * 0.5)
+                ]
+                pygame.draw.lines(screen, WHITE, False, points, 3)
+
+            elif i == self.current_stage:
+                # 當前 - 脈動效果
+                pulse = 0.7 + 0.3 * math.sin(self.heat_wave_phase * 3)
+
+                # 多層光暈
+                for layer in range(3):
+                    glow_radius = node_radius + 8 + layer * 4
+                    glow_alpha = int(60 * pulse * (3 - layer) / 3)
+                    glow_surf = pygame.Surface((glow_radius * 2, glow_radius * 2), pygame.SRCALPHA)
+                    pygame.draw.circle(glow_surf, (*ACCENT_COLOR, glow_alpha),
+                                     (glow_radius, glow_radius), glow_radius)
+                    screen.blit(glow_surf, (x - glow_radius, y - glow_radius))
+
+                pygame.draw.circle(screen, ACCENT_COLOR, (x, y), node_radius)
+
+                # 內部高光
+                inner_radius = int(node_radius * 0.6)
+                highlight = tuple(min(255, c + 50) for c in ACCENT_COLOR)
+                pygame.draw.circle(screen, highlight, (x - 2, y - 2), inner_radius)
+
+                pygame.draw.circle(screen, WHITE, (x, y), node_radius, 2)
+
+                # 數字
+                num_font = pygame.font.SysFont("Microsoft JhengHei", int(node_radius * 0.8), bold=True)
+                num_text = num_font.render(str(i + 1), True, WHITE)
+                num_rect = num_text.get_rect(center=(x, y))
+                screen.blit(num_text, num_rect)
+
+            else:
+                # 未完成 - 灰色空心
+                pygame.draw.circle(screen, DARK_GRAY, (x, y), node_radius)
+                pygame.draw.circle(screen, GRAY, (x, y), node_radius, 2)
 
             # 階段名稱
-            name_surface = self.small_font.render(stage["name"], True, LIGHT_GRAY)
-            name_rect = name_surface.get_rect(center=(x, y + 30))
-            screen.blit(name_surface, name_rect)
+            if i == self.current_stage:
+                name_color = ACCENT_COLOR
+            elif i < self.current_stage:
+                name_color = TEXT_PRIMARY
+            else:
+                name_color = TEXT_MUTED
 
-            # 連接線
-            if i < len(self.STAGES) - 1:
-                line_color = SECONDARY_COLOR if i < self.current_stage else GRAY
-                pygame.draw.line(screen, line_color, (x + 15, y), (x + spacing - 15, y), 2)
+            name_surface = self.small_font.render(stage["name"], True, name_color)
+            name_rect = name_surface.get_rect(center=(x, y + 35))
+            screen.blit(name_surface, name_rect)
 
     def _draw_material(self, screen: pygame.Surface):
         """繪製材料視覺化"""
