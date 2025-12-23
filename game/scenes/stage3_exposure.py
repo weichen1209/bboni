@@ -26,6 +26,10 @@ class ExposureStage(Scene):
     FILL_SPEED_STABLE = 0.15      # 穩定時進度填充速度
     FILL_SPEED_UNSTABLE = 0.02    # 不穩定時進度填充速度
 
+    # 晶圓參數（與第四關一致）
+    WAFER_RADIUS = 100            # 晶圓半徑 (像素)
+    GRID_SIZE = 40                # 圖案網格解析度
+
     def __init__(self, game):
         super().__init__(game)
 
@@ -37,6 +41,13 @@ class ExposureStage(Scene):
         self.exposure_progress = 0.0     # 曝光進度 (0-1)
         self.stability_samples = []      # 穩定度樣本
         self.current_stability = 0.0
+
+        # 晶圓中心位置
+        self.wafer_center_x = SCREEN_WIDTH // 2
+        self.wafer_center_y = 280
+
+        # H 形目標圖案網格
+        self.target_grid = [[False] * self.GRID_SIZE for _ in range(self.GRID_SIZE)]
 
         # 動畫
         self.uv_pulse = 0.0              # UV 光脈動動畫
@@ -112,6 +123,9 @@ class ExposureStage(Scene):
         self.warning_flash = 0.0
         self._stability_history = []  # 重置穩定度歷史
 
+        # 生成 H 形目標圖案
+        self._generate_target_pattern()
+
     def handle_event(self, event: pygame.event.Event):
         """處理事件"""
         if self.phase == self.PHASE_INSTRUCTIONS:
@@ -169,20 +183,77 @@ class ExposureStage(Scene):
         else:
             self.switch_to("result")
 
-    def _get_stability(self) -> float:
-        """取得穩定度（使用3軸加速度計算整體穩定性，含平滑處理）"""
-        if self.game.sensor and self.game.sensor.is_connected:
-            # 使用原始資料（包含重力分量，靜止時向量大小約 2048）
-            data = self.game.sensor.get_raw_imu_data()
-            # 計算3軸加速度向量的大小 (靈敏度: 2048 LSB/g，靜止時約為 2048)
-            total_accel = (data.ax ** 2 + data.ay ** 2 + data.az ** 2) ** 0.5
-            # 靜止時 total_accel 約為 2048 (1g)
-            # 計算偏離靜止狀態的程度
-            deviation = abs(total_accel - 2048) / 2048.0
-            # 放寬容忍度到 0.8g，使平放時更容易達到 100%
-            raw_stability = max(0.0, 1.0 - deviation / 0.8)
+    def _generate_target_pattern(self):
+        """生成 H 形電路圖案（與第四關一致）"""
+        center = self.GRID_SIZE // 2
+        half_width = 2   # 線條半寬度
+        h_height = 12    # H 的高度範圍
+        h_width = 10     # H 的寬度範圍
 
-            # 使用移動平均平滑化（最近 5 個樣本），避免噪音波動
+        # 清空網格
+        for y in range(self.GRID_SIZE):
+            for x in range(self.GRID_SIZE):
+                self.target_grid[y][x] = False
+
+        # H 的左側垂直線
+        for y in range(center - h_height, center + h_height + 1):
+            for x in range(center - h_width - half_width, center - h_width + half_width + 1):
+                if self._is_in_wafer_grid(x, y):
+                    self.target_grid[y][x] = True
+
+        # H 的右側垂直線
+        for y in range(center - h_height, center + h_height + 1):
+            for x in range(center + h_width - half_width, center + h_width + half_width + 1):
+                if self._is_in_wafer_grid(x, y):
+                    self.target_grid[y][x] = True
+
+        # H 的中間水平線
+        for y in range(center - half_width, center + half_width + 1):
+            for x in range(center - h_width, center + h_width + 1):
+                if self._is_in_wafer_grid(x, y):
+                    self.target_grid[y][x] = True
+
+    def _is_in_wafer_grid(self, gx: int, gy: int) -> bool:
+        """檢查網格座標是否在晶圓範圍內"""
+        if gx < 0 or gx >= self.GRID_SIZE or gy < 0 or gy >= self.GRID_SIZE:
+            return False
+
+        # 轉換為相對於中心的座標
+        center = self.GRID_SIZE // 2
+        dx = gx - center
+        dy = gy - center
+
+        # 檢查是否在圓形範圍內
+        grid_radius = self.GRID_SIZE // 2 - 2
+        return (dx * dx + dy * dy) <= (grid_radius * grid_radius)
+
+    def _grid_to_pixel(self, gx: int, gy: int) -> tuple:
+        """將網格座標轉換為像素座標"""
+        grid_center = self.GRID_SIZE // 2
+        scale = (self.WAFER_RADIUS * 2) / self.GRID_SIZE
+
+        px = self.wafer_center_x + (gx - grid_center) * scale
+        py = self.wafer_center_y + (gy - grid_center) * scale
+
+        return (px, py)
+
+    def _get_stability(self) -> float:
+        """取得穩定度（使用陀螺儀檢測旋轉運動）"""
+        if self.game.sensor and self.game.sensor.is_connected:
+            data = self.game.sensor.get_imu_data()
+
+            # 使用陀螺儀檢測旋轉運動（靈敏度: 16.4 LSB/dps）
+            gyro_magnitude = (data.gx ** 2 + data.gy ** 2 + data.gz ** 2) ** 0.5
+            gyro_dps = gyro_magnitude / 16.4  # 轉換為 度/秒
+
+            # 死區：< 5 dps 視為完全穩定
+            if gyro_dps < 5:
+                raw_stability = 1.0
+            else:
+                # 5-30 dps 線性映射到 1.0-0.0
+                raw_stability = max(0.0, 1.0 - (gyro_dps - 5) / 25)
+
+            # 使用移動平均平滑化（最近 5 個樣本）
             self._stability_history.append(raw_stability)
             if len(self._stability_history) > 5:
                 self._stability_history.pop(0)
@@ -450,8 +521,8 @@ class ExposureStage(Scene):
         screen.blit(beam_surf, (center_x - beam_width // 2, center_y + 30))
 
     def _draw_wafer_preview(self, screen: pygame.Surface, cx: int, cy: int):
-        """繪製晶圓預覽"""
-        radius = 100
+        """繪製晶圓預覽（含 H 形目標圖案）"""
+        radius = self.WAFER_RADIUS
 
         # 晶圓底座
         pygame.draw.circle(screen, DARK_GRAY, (cx, cy), radius + 5)
@@ -459,15 +530,24 @@ class ExposureStage(Scene):
         # 晶圓本體
         pygame.draw.circle(screen, SILICON_BLUE, (cx, cy), radius)
 
-        # 光阻層（等待曝光）
-        pygame.draw.circle(screen, PHOTORESIST_PURPLE, (cx, cy), radius - 10, 5)
+        # 繪製 H 形目標圖案（光阻層）
+        cell_size = (radius * 2) / self.GRID_SIZE
+        for gy in range(self.GRID_SIZE):
+            for gx in range(self.GRID_SIZE):
+                if not self._is_in_wafer_grid(gx, gy):
+                    continue
+                if self.target_grid[gy][gx]:
+                    px, py = self._grid_to_pixel(gx, gy)
+                    surf = pygame.Surface((cell_size + 1, cell_size + 1), pygame.SRCALPHA)
+                    surf.fill((*PHOTORESIST_PURPLE, 180))
+                    screen.blit(surf, (px - cell_size / 2, py - cell_size / 2))
 
         # 邊框
         pygame.draw.circle(screen, WHITE, (cx, cy), radius, 2)
 
     def _draw_wafer_exposing(self, screen: pygame.Surface, cx: int, cy: int):
-        """繪製曝光中的晶圓"""
-        radius = 100
+        """繪製曝光中的晶圓（含 H 形曝光效果）"""
+        radius = self.WAFER_RADIUS
 
         # 晶圓底座
         pygame.draw.circle(screen, DARK_GRAY, (cx, cy), radius + 5)
@@ -475,20 +555,34 @@ class ExposureStage(Scene):
         # 晶圓本體
         pygame.draw.circle(screen, SILICON_BLUE, (cx, cy), radius)
 
-        # 曝光進度效果（從中心向外擴展的光環）
-        exposed_radius = int(radius * self.exposure_progress)
-        if exposed_radius > 0:
-            # 已曝光區域
-            pulse = 0.8 + 0.2 * math.sin(self.uv_pulse)
-            exposed_color = (
-                int(PHOTORESIST_PURPLE[0] * pulse),
-                int(PHOTORESIST_PURPLE[1] * pulse),
-                int(PHOTORESIST_PURPLE[2] * pulse)
-            )
-            pygame.draw.circle(screen, exposed_color, (cx, cy), exposed_radius)
+        # 繪製 H 形圖案曝光效果
+        cell_size = (radius * 2) / self.GRID_SIZE
+        pulse = 0.8 + 0.2 * math.sin(self.uv_pulse)
 
-        # 未曝光光阻（外圈）
-        pygame.draw.circle(screen, PHOTORESIST_PURPLE, (cx, cy), radius - 5, 3)
+        for gy in range(self.GRID_SIZE):
+            for gx in range(self.GRID_SIZE):
+                if not self._is_in_wafer_grid(gx, gy):
+                    continue
+                if self.target_grid[gy][gx]:
+                    px, py = self._grid_to_pixel(gx, gy)
+
+                    # 根據曝光進度決定顏色
+                    if self.exposure_progress > 0:
+                        # 已曝光部分：亮紫色脈動
+                        exposed_alpha = int(180 + 50 * pulse * self.exposure_progress)
+                        exposed_color = (
+                            int(PHOTORESIST_PURPLE[0] * pulse),
+                            int(PHOTORESIST_PURPLE[1] * pulse),
+                            int(min(255, PHOTORESIST_PURPLE[2] * (1 + 0.3 * self.exposure_progress))),
+                            min(255, exposed_alpha)
+                        )
+                    else:
+                        # 未曝光：暗紫色
+                        exposed_color = (*PHOTORESIST_PURPLE, 150)
+
+                    surf = pygame.Surface((cell_size + 1, cell_size + 1), pygame.SRCALPHA)
+                    surf.fill(exposed_color)
+                    screen.blit(surf, (px - cell_size / 2, py - cell_size / 2))
 
         # 穩定度視覺化 - 晃動時晶圓邊緣模糊
         if self.current_stability < self.STABILITY_THRESHOLD:
@@ -504,8 +598,8 @@ class ExposureStage(Scene):
         pygame.draw.circle(screen, WHITE, (cx, cy), radius, 2)
 
     def _draw_wafer_complete(self, screen: pygame.Surface, cx: int, cy: int):
-        """繪製完成的晶圓"""
-        radius = 100
+        """繪製完成的晶圓（含 H 形曝光結果）"""
+        radius = self.WAFER_RADIUS
 
         # 晶圓底座
         pygame.draw.circle(screen, DARK_GRAY, (cx, cy), radius + 5)
@@ -513,28 +607,29 @@ class ExposureStage(Scene):
         # 晶圓本體
         pygame.draw.circle(screen, SILICON_BLUE, (cx, cy), radius)
 
-        # 曝光後的圖案（根據分數決定品質）
+        # 曝光後的 H 形圖案（根據分數決定品質）
         quality = self.exposure_score / 100
+        cell_size = (radius * 2) / self.GRID_SIZE
 
-        # 電路圖案網格
-        grid_size = 15
-        for i in range(-6, 7):
-            for j in range(-6, 7):
-                x = cx + i * grid_size
-                y = cy + j * grid_size
-                dist = math.sqrt((x - cx) ** 2 + (y - cy) ** 2)
-                if dist < radius - 10:
-                    # 根據品質決定圖案清晰度
-                    if quality > 0.7:
-                        pattern_color = SECONDARY_COLOR
-                        size = 5
-                    elif quality > 0.4:
-                        pattern_color = ACCENT_COLOR
-                        size = 4
-                    else:
-                        pattern_color = DANGER_COLOR
-                        size = 3
-                    pygame.draw.rect(screen, pattern_color, (x - size // 2, y - size // 2, size, size))
+        # 根據品質決定圖案顏色
+        if quality > 0.7:
+            pattern_color = SECONDARY_COLOR
+        elif quality > 0.4:
+            pattern_color = ACCENT_COLOR
+        else:
+            pattern_color = DANGER_COLOR
+
+        for gy in range(self.GRID_SIZE):
+            for gx in range(self.GRID_SIZE):
+                if not self._is_in_wafer_grid(gx, gy):
+                    continue
+                if self.target_grid[gy][gx]:
+                    px, py = self._grid_to_pixel(gx, gy)
+                    # 根據品質決定透明度
+                    alpha = int(180 + 70 * quality)
+                    surf = pygame.Surface((cell_size + 1, cell_size + 1), pygame.SRCALPHA)
+                    surf.fill((*pattern_color, alpha))
+                    screen.blit(surf, (px - cell_size / 2, py - cell_size / 2))
 
         # 邊框
         pygame.draw.circle(screen, WHITE, (cx, cy), radius, 3)
