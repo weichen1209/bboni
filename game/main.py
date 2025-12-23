@@ -19,6 +19,7 @@ from .scenes.stage1_material import MaterialStage
 from .scenes.stage2_deposition import DepositionStage
 from .scenes.stage3_exposure import ExposureStage
 from .scenes.stage4_etching import EtchingStage
+from .scenes.intro import Intro1Scene, Intro2Scene, Intro3Scene, Intro4Scene
 from .utils.cv_scoring import ShapeType
 from sensor.bboni_ble import BboniSensor
 
@@ -58,9 +59,13 @@ class Game:
         self.scenes = {
             "menu": MenuScene,
             "calibration": CalibrationScene,
+            "intro1": Intro1Scene,
             "stage1": MaterialStage,
+            "intro2": Intro2Scene,
             "stage2": DepositionStage,
+            "intro3": Intro3Scene,
             "stage3": ExposureStage,
+            "intro4": Intro4Scene,
             "stage4": EtchingStage,
             "result": ResultScene,
         }

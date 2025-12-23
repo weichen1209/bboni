@@ -55,7 +55,7 @@ class CalibrationScene(Scene):
 
         elif self.state == "done":
             if event.type == pygame.KEYDOWN or event.type == pygame.MOUSEBUTTONDOWN:
-                self.switch_to("stage1")
+                self.switch_to("intro1")
 
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
@@ -64,7 +64,7 @@ class CalibrationScene(Scene):
                 if self.state == "waiting":
                     self._start_calibration()
                 elif self.state == "done":
-                    self.switch_to("stage1")
+                    self.switch_to("intro1")
 
     def _start_calibration(self):
         """開始校正"""

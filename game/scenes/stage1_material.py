@@ -155,7 +155,7 @@ class MaterialStage(Scene):
 
     def _finish_stage(self):
         """完成關卡，進入下一關"""
-        self.switch_to("stage2")
+        self.switch_to("intro2")
 
     def update(self, dt: float):
         """更新遊戲邏輯"""

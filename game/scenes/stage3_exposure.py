@@ -294,7 +294,7 @@ class ExposureStage(Scene):
         """完成關卡，進入下一關"""
         # 檢查 stage4 是否存在，否則進入 result
         if "stage4" in self.game.scenes:
-            self.switch_to("stage4")
+            self.switch_to("intro4")
         else:
             self.switch_to("result")
 

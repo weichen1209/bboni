@@ -207,7 +207,7 @@ class DepositionStage(Scene):
 
     def _finish_stage(self):
         """完成關卡，進入下一關"""
-        self.switch_to("stage3")
+        self.switch_to("intro3")
 
     def update(self, dt: float):
         """更新遊戲邏輯"""
