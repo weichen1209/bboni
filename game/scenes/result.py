@@ -4,6 +4,7 @@
 
 import pygame
 import math
+import random
 from .base import Scene, Button
 from ..config import *
 
@@ -17,6 +18,47 @@ class ResultScene(Scene):
         "uniformity": "薄膜均勻度",
         "exposure": "曝光品質",
         "precision": "蝕刻精準度",
+    }
+
+    # 各關卡評語 (5個級距)
+    STAGE_COMMENTS = {
+        "purity": {  # 第一關：材料純度
+            90: "結晶完美無暇",
+            80: "純度極佳",
+            70: "雜質控制良好",
+            60: "純度達標",
+            0:  "需重新提煉",
+        },
+        "uniformity": {  # 第二關：薄膜均勻度
+            90: "薄膜沉積完美",
+            80: "膜厚均勻優異",
+            70: "覆蓋率良好",
+            60: "均勻度尚可",
+            0:  "薄膜不均勻",
+        },
+        "exposure": {  # 第三關：曝光品質
+            90: "曝光精準完美",
+            80: "對焦極為銳利",
+            70: "圖案清晰",
+            60: "曝光品質達標",
+            0:  "曝光失焦模糊",
+        },
+        "precision": {  # 第四關：蝕刻精準度
+            90: "電路圖案完美",
+            80: "線寬控制優異",
+            70: "圖案還原良好",
+            60: "圖案略有偏差",
+            0:  "圖案偏差過大",
+        },
+    }
+
+    # 總評評語 (5個級距)
+    TOTAL_COMMENTS = {
+        90: "良率頂尖！達到量產標準，可直接出貨！",
+        80: "製程穩定，品質優異，已達業界水準！",
+        70: "品質良好，微調參數後可提升良率。",
+        60: "品質合格，建議檢視各製程環節。",
+        0:  "良率偏低，需重新檢討製程參數。",
     }
 
     def __init__(self, game):
@@ -34,11 +76,15 @@ class ResultScene(Scene):
         # UI 元件
         center_x = SCREEN_WIDTH // 2
         self.replay_button = Button(
-            center_x - 220, 600, 200, 50,
+            center_x - 320, 600, 190, 50,
             "再玩一次", PRIMARY_COLOR
         )
+        self.leaderboard_button = Button(
+            center_x - 95, 600, 190, 50,
+            "排行榜", SECONDARY_COLOR
+        )
         self.menu_button = Button(
-            center_x + 20, 600, 200, 50,
+            center_x + 130, 600, 190, 50,
             "主選單", GRAY
         )
 
@@ -61,6 +107,9 @@ class ResultScene(Scene):
         # 計算總分
         self._calculate_results()
 
+        # 儲存成績到排行榜
+        self._save_to_leaderboard()
+
         # 重設動畫
         self.animation_progress = 0.0
 
@@ -73,20 +122,60 @@ class ResultScene(Scene):
         for key, weight in SCORE_WEIGHTS.items():
             self.total_score += scores.get(key, 0) * (weight / 100)
 
-        self.total_score = int(self.total_score)
+        # 隨機加減 5 分（模擬製程變異）
+        random_adjustment = random.randint(-5, 5)
+        self.total_score = int(self.total_score) + random_adjustment
+
+        # 限制在 0-100 範圍
+        self.total_score = max(0, min(100, self.total_score))
 
         # 良率
         self.yield_rate = self.total_score
 
-        # 等級
+        # 等級 (5級制: S/A/B/C/D)
         if self.total_score >= 90:
+            self.grade = "S"
+        elif self.total_score >= 80:
             self.grade = "A"
-        elif self.total_score >= 75:
+        elif self.total_score >= 70:
             self.grade = "B"
         elif self.total_score >= 60:
             self.grade = "C"
         else:
             self.grade = "D"
+
+    def _get_comment(self, score: int, comments_dict: dict) -> str:
+        """根據分數取得對應評語"""
+        if score >= 90:
+            return comments_dict[90]
+        elif score >= 80:
+            return comments_dict[80]
+        elif score >= 70:
+            return comments_dict[70]
+        elif score >= 60:
+            return comments_dict[60]
+        else:
+            return comments_dict[0]
+
+    def _save_to_leaderboard(self):
+        """儲存成績到排行榜資料庫"""
+        # 確保有玩家暱稱
+        if not hasattr(self.game, 'player_nickname') or not self.game.player_nickname:
+            return
+
+        # 儲存到資料庫
+        try:
+            record_id = self.game.leaderboard_db.add_record(
+                nickname=self.game.player_nickname,
+                total_score=self.total_score,
+                grade=self.grade,
+                scores=self.game.scores
+            )
+            # 儲存紀錄 ID 供排行榜場景使用
+            self.game._last_record_id = record_id
+        except Exception:
+            # 如果儲存失敗，靜默處理
+            pass
 
     def handle_event(self, event: pygame.event.Event):
         """處理事件"""
@@ -94,7 +183,11 @@ class ResultScene(Scene):
             # 重設分數
             for key in self.game.scores:
                 self.game.scores[key] = 0
-            self.switch_to("calibration")
+            self.switch_to("nickname")
+
+        if self.leaderboard_button.handle_event(event):
+            # 查看排行榜（不重設分數，讓排行榜場景處理）
+            self.switch_to("leaderboard")
 
         if self.menu_button.handle_event(event):
             # 重設分數
@@ -108,9 +201,8 @@ class ResultScene(Scene):
                     self.game.scores[key] = 0
                 self.switch_to("menu")
             elif event.key == pygame.K_SPACE or event.key == pygame.K_RETURN:
-                for key in self.game.scores:
-                    self.game.scores[key] = 0
-                self.switch_to("calibration")
+                # 查看排行榜
+                self.switch_to("leaderboard")
 
     def update(self, dt: float):
         """更新"""
@@ -121,6 +213,11 @@ class ResultScene(Scene):
 
         # 晶圓旋轉
         self.wafer_rotation += dt * 20
+
+        # 更新按鈕動畫
+        self.replay_button.update(dt)
+        self.leaderboard_button.update(dt)
+        self.menu_button.update(dt)
 
     def draw(self, screen: pygame.Surface):
         """繪製"""
@@ -149,6 +246,7 @@ class ResultScene(Scene):
 
         # 按鈕
         self.replay_button.draw(screen)
+        self.leaderboard_button.draw(screen)
         self.menu_button.draw(screen)
 
     def _draw_header(self, screen: pygame.Surface):
@@ -209,6 +307,21 @@ class ResultScene(Scene):
             score_rect = score_text.get_rect(midleft=(start_x + bar_width + 20, bar_y + bar_height // 2))
             screen.blit(score_text, score_rect)
 
+            # 評語（動畫完成後才顯示）
+            if self.animation_progress >= 0.8:
+                comment = self._get_comment(score, self.STAGE_COMMENTS[key])
+                # 根據分數決定顏色
+                if score >= 80:
+                    comment_color = SECONDARY_COLOR
+                elif score >= 60:
+                    comment_color = PRIMARY_COLOR
+                else:
+                    comment_color = ACCENT_COLOR
+
+                comment_text = self.small_font.render(comment, True, comment_color)
+                comment_rect = comment_text.get_rect(midleft=(start_x + bar_width + 100, bar_y + bar_height // 2))
+                screen.blit(comment_text, comment_rect)
+
     def _draw_total(self, screen: pygame.Surface):
         """繪製總分"""
         center_x = SCREEN_WIDTH // 2
@@ -227,12 +340,13 @@ class ResultScene(Scene):
         score_rect = score_text.get_rect(center=(center_x + 50, y))
         screen.blit(score_text, score_rect)
 
-        # 等級
+        # 等級 (5級制)
         grade_colors = {
-            "A": SECONDARY_COLOR,
-            "B": PRIMARY_COLOR,
-            "C": ACCENT_COLOR,
-            "D": DANGER_COLOR,
+            "S": SECONDARY_COLOR,  # 綠色（頂尖）
+            "A": SECONDARY_COLOR,  # 綠色
+            "B": PRIMARY_COLOR,    # 藍色
+            "C": ACCENT_COLOR,     # 黃色
+            "D": DANGER_COLOR,     # 紅色
         }
         grade_color = grade_colors.get(self.grade, WHITE)
 
@@ -288,22 +402,24 @@ class ResultScene(Scene):
         screen.blit(label, label_rect)
 
     def _draw_comment(self, screen: pygame.Surface):
-        """繪製評語"""
+        """繪製總評語"""
         center_x = SCREEN_WIDTH // 2
         y = 500
 
-        if self.grade == "A":
-            comment = "傑出！你的晶圓已達量產水準！"
+        # 使用 5 級評語系統
+        comment = self._get_comment(self.total_score, self.TOTAL_COMMENTS)
+
+        # 顏色對應
+        if self.total_score >= 90:
+            color = SECONDARY_COLOR  # 綠色
+        elif self.total_score >= 80:
             color = SECONDARY_COLOR
-        elif self.grade == "B":
-            comment = "做得好！還有些小地方可以改進。"
-            color = PRIMARY_COLOR
-        elif self.grade == "C":
-            comment = "品質合格。繼續加油！"
-            color = ACCENT_COLOR
+        elif self.total_score >= 70:
+            color = PRIMARY_COLOR    # 藍色
+        elif self.total_score >= 60:
+            color = ACCENT_COLOR     # 黃色
         else:
-            comment = "需要改進。再試一次！"
-            color = DANGER_COLOR
+            color = DANGER_COLOR     # 紅色
 
         # 只有動畫完成後才顯示
         if self.animation_progress >= 0.8:
@@ -312,6 +428,6 @@ class ResultScene(Scene):
             screen.blit(comment_text, comment_rect)
 
             # 提示
-            hint = self.small_font.render("按 SPACE 再玩一次，ESC 返回選單", True, GRAY)
+            hint = self.small_font.render("按 SPACE 查看排行榜，ESC 返回選單", True, GRAY)
             hint_rect = hint.get_rect(center=(center_x, y + 40))
             screen.blit(hint, hint_rect)

@@ -20,7 +20,10 @@ from .scenes.stage2_deposition import DepositionStage
 from .scenes.stage3_exposure import ExposureStage
 from .scenes.stage4_etching import EtchingStage
 from .scenes.intro import Intro1Scene, Intro2Scene, Intro3Scene, Intro4Scene
+from .scenes.nickname import NicknameScene
+from .scenes.leaderboard import LeaderboardScene
 from .utils.cv_scoring import ShapeType
+from .database import LeaderboardDB
 from sensor.bboni_ble import BboniSensor
 
 
@@ -52,12 +55,19 @@ class Game:
             "precision": 0,
         }
 
+        # 玩家暱稱
+        self.player_nickname = ""
+
+        # 排行榜資料庫
+        self.leaderboard_db = LeaderboardDB()
+
         # 選擇的圖形類型（在第三關選擇，第三、四關共用）
-        self.selected_shape_type = ShapeType.TRANSISTOR
+        self.selected_shape_type = ShapeType.PENTAGON_STAR
 
         # 場景管理
         self.scenes = {
             "menu": MenuScene,
+            "nickname": NicknameScene,
             "calibration": CalibrationScene,
             "intro1": Intro1Scene,
             "stage1": MaterialStage,
@@ -68,6 +78,7 @@ class Game:
             "intro4": Intro4Scene,
             "stage4": EtchingStage,
             "result": ResultScene,
+            "leaderboard": LeaderboardScene,
         }
         self.current_scene = None
         self._switch_scene("menu")

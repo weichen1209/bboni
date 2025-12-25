@@ -271,11 +271,8 @@ class Button:
                            border_radius=15)
             screen.blit(glow_surf, glow_rect.topleft)
 
-        # 計算當前顏色
-        r = int(self.color[0] + (self.hover_color[0] - self.color[0]) * self.hover_progress)
-        g = int(self.color[1] + (self.hover_color[1] - self.color[1]) * self.hover_progress)
-        b = int(self.color[2] + (self.hover_color[2] - self.color[2]) * self.hover_progress)
-        current_color = (r, g, b)
+        # 使用原始顏色（不變色）
+        current_color = self.color
 
         # 繪製漸層主體
         body_surf = pygame.Surface((draw_rect.width, draw_rect.height), pygame.SRCALPHA)
@@ -551,3 +548,170 @@ class ShapeCard:
         diff_surface = small_font.render(diff_text, True, diff_color)
         diff_rect = diff_surface.get_rect(center=(rect.centerx, rect.y + rect.height * 0.88))
         screen.blit(diff_surface, diff_rect)
+
+
+class TextInput:
+    """文字輸入框元件"""
+
+    def __init__(self, x: int, y: int, width: int, height: int,
+                 placeholder: str = "",
+                 max_length: int = 12,
+                 font_size: int = 28,
+                 bg_color: tuple = (45, 55, 80),
+                 text_color: tuple = (255, 255, 255),
+                 placeholder_color: tuple = (120, 130, 150),
+                 border_color: tuple = (52, 152, 219),
+                 border_color_focus: tuple = (85, 175, 235)):
+        self.rect = pygame.Rect(x, y, width, height)
+        self.text = ""
+        self.placeholder = placeholder
+        self.max_length = max_length
+        self.font_size = font_size
+        self.bg_color = bg_color
+        self.text_color = text_color
+        self.placeholder_color = placeholder_color
+        self.border_color = border_color
+        self.border_color_focus = border_color_focus
+
+        self.is_focused = True  # 預設聚焦
+        self._font = None
+
+        # 游標動畫
+        self.cursor_visible = True
+        self.cursor_timer = 0.0
+        self.cursor_blink_speed = 0.5  # 秒
+
+        # 動畫狀態
+        self.focus_progress = 1.0
+        self.glow_phase = 0.0
+
+    @property
+    def font(self):
+        if self._font is None:
+            self._font = pygame.font.SysFont("Microsoft JhengHei", self.font_size)
+        return self._font
+
+    def handle_event(self, event: pygame.event.Event) -> bool:
+        """
+        處理事件
+        Returns: True 如果按下 Enter 鍵
+        """
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 1:
+                self.is_focused = self.rect.collidepoint(event.pos)
+
+        if not self.is_focused:
+            return False
+
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+                return True
+            elif event.key == pygame.K_BACKSPACE:
+                self.text = self.text[:-1]
+            elif event.key == pygame.K_ESCAPE:
+                self.is_focused = False
+
+        elif event.type == pygame.TEXTINPUT:
+            # 使用 TEXTINPUT 事件處理中文輸入
+            if len(self.text) < self.max_length:
+                self.text += event.text
+
+        return False
+
+    def update(self, dt: float):
+        """更新動畫狀態"""
+        # 游標閃爍
+        self.cursor_timer += dt
+        if self.cursor_timer >= self.cursor_blink_speed:
+            self.cursor_timer = 0.0
+            self.cursor_visible = not self.cursor_visible
+
+        # 聚焦動畫
+        target = 1.0 if self.is_focused else 0.0
+        self.focus_progress += (target - self.focus_progress) * min(1.0, dt * 8)
+
+        # 光暈動畫
+        self.glow_phase += dt * 3
+
+    def draw(self, screen: pygame.Surface):
+        """繪製輸入框"""
+        rect = self.rect
+
+        # 光暈效果（聚焦時）
+        if self.focus_progress > 0.01:
+            glow_intensity = self.focus_progress * (0.6 + 0.4 * math.sin(self.glow_phase))
+            glow_size = 4
+            glow_rect = rect.inflate(glow_size * 2, glow_size * 2)
+            glow_surf = pygame.Surface((glow_rect.width, glow_rect.height), pygame.SRCALPHA)
+            glow_alpha = int(40 * glow_intensity)
+            pygame.draw.rect(glow_surf, (*self.border_color_focus, glow_alpha),
+                           (0, 0, glow_rect.width, glow_rect.height),
+                           border_radius=12)
+            screen.blit(glow_surf, glow_rect.topleft)
+
+        # 背景漸層
+        bg_surf = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+        for y in range(rect.height):
+            ratio = y / rect.height
+            brightness = 1.0 - ratio * 0.2
+            row_color = tuple(min(255, int(c * brightness)) for c in self.bg_color)
+            pygame.draw.line(bg_surf, (*row_color, 255), (0, y), (rect.width, y))
+
+        # 應用圓角
+        mask = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+        pygame.draw.rect(mask, (255, 255, 255, 255), (0, 0, rect.width, rect.height),
+                        border_radius=10)
+        bg_surf.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+        screen.blit(bg_surf, rect.topleft)
+
+        # 邊框顏色（聚焦時高亮）
+        r = int(self.border_color[0] + (self.border_color_focus[0] - self.border_color[0]) * self.focus_progress)
+        g = int(self.border_color[1] + (self.border_color_focus[1] - self.border_color[1]) * self.focus_progress)
+        b = int(self.border_color[2] + (self.border_color_focus[2] - self.border_color[2]) * self.focus_progress)
+        current_border = (r, g, b)
+        border_width = 2 if self.is_focused else 1
+        pygame.draw.rect(screen, current_border, rect, width=border_width, border_radius=10)
+
+        # 繪製文字或 placeholder
+        text_x = rect.x + 15
+        text_y = rect.centery
+
+        if self.text:
+            text_surface = self.font.render(self.text, True, self.text_color)
+            text_rect = text_surface.get_rect(midleft=(text_x, text_y))
+            screen.blit(text_surface, text_rect)
+
+            # 繪製游標
+            if self.is_focused and self.cursor_visible:
+                cursor_x = text_rect.right + 2
+                cursor_height = int(rect.height * 0.6)
+                cursor_y = rect.centery - cursor_height // 2
+                pygame.draw.line(screen, self.text_color,
+                               (cursor_x, cursor_y),
+                               (cursor_x, cursor_y + cursor_height), 2)
+        else:
+            # 顯示 placeholder
+            placeholder_surface = self.font.render(self.placeholder, True, self.placeholder_color)
+            placeholder_rect = placeholder_surface.get_rect(midleft=(text_x, text_y))
+            screen.blit(placeholder_surface, placeholder_rect)
+
+            # 繪製游標在開頭
+            if self.is_focused and self.cursor_visible:
+                cursor_x = text_x
+                cursor_height = int(rect.height * 0.6)
+                cursor_y = rect.centery - cursor_height // 2
+                pygame.draw.line(screen, self.text_color,
+                               (cursor_x, cursor_y),
+                               (cursor_x, cursor_y + cursor_height), 2)
+
+    def get_text(self) -> str:
+        """取得輸入的文字"""
+        return self.text
+
+    def set_text(self, text: str):
+        """設定文字"""
+        self.text = text[:self.max_length]
+
+    def clear(self):
+        """清空輸入"""
+        self.text = ""

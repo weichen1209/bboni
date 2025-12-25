@@ -26,7 +26,7 @@ class ExposureStage(Scene):
 
     # 曝光參數
     EXPOSURE_DURATION = 10.0      # 最長曝光時間 (秒)
-    STABILITY_THRESHOLD = 0.6     # 穩定閾值 (低於此值顯示警告，已放寬)
+    STABILITY_THRESHOLD = 0.75    # 穩定閾值 (低於此值顯示警告，調嚴)
     FILL_SPEED_STABLE = 0.15      # 穩定時進度填充速度
     FILL_SPEED_UNSTABLE = 0.02    # 不穩定時進度填充速度
 
@@ -202,10 +202,10 @@ class ExposureStage(Scene):
     def _init_shape_cards(self):
         """初始化圖形選擇卡片"""
         shapes = [
-            ShapeType.TRANSISTOR,
-            ShapeType.CAPACITOR,
-            ShapeType.IC_CHIP,
-            ShapeType.OP_AMP,
+            ShapeType.PENTAGON_STAR,
+            ShapeType.CIRCLE_STAR,
+            ShapeType.OVAL_RECT,
+            ShapeType.PYRAMID,
         ]
 
         card_width = 180
@@ -307,21 +307,46 @@ class ExposureStage(Scene):
             for x in range(self.GRID_SIZE):
                 self.target_grid[y][x] = False
 
-        if shape_type == ShapeType.TRANSISTOR:
-            self._generate_transistor_pattern()
-        elif shape_type == ShapeType.CAPACITOR:
-            self._generate_capacitor_pattern()
-        elif shape_type == ShapeType.IC_CHIP:
-            self._generate_ic_pattern()
-        elif shape_type == ShapeType.OP_AMP:
-            self._generate_opamp_pattern()
+        if shape_type == ShapeType.PENTAGON_STAR:
+            self._generate_pentagon_star_pattern()
+        elif shape_type == ShapeType.CIRCLE_STAR:
+            self._generate_circle_star_pattern()
+        elif shape_type == ShapeType.OVAL_RECT:
+            self._generate_oval_rect_pattern()
+        elif shape_type == ShapeType.PYRAMID:
+            self._generate_pyramid_pattern()
         else:
-            self._generate_transistor_pattern()  # 預設
+            self._generate_pentagon_star_pattern()  # 預設
 
-    def _generate_transistor_pattern(self):
-        """生成 NPN 電晶體圖案（圓形 + 基極 + 集電極/發射極）"""
+    def _generate_pentagon_star_pattern(self):
+        """生成五角晶體圖案（五邊形 + 內部五角星）"""
         center = self.GRID_SIZE // 2
-        radius = 8
+        radius = 10
+
+        # 計算五邊形頂點
+        pentagon_points = []
+        for i in range(5):
+            angle = math.radians(-90 + i * 72)
+            x = int(center + radius * math.cos(angle))
+            y = int(center + radius * math.sin(angle))
+            pentagon_points.append((x, y))
+
+        # 繪製五邊形外框
+        for i in range(5):
+            p1 = pentagon_points[i]
+            p2 = pentagon_points[(i + 1) % 5]
+            self._draw_line(p1[0], p1[1], p2[0], p2[1])
+
+        # 繪製內部五角星
+        for i in range(5):
+            p1 = pentagon_points[i]
+            p2 = pentagon_points[(i + 2) % 5]
+            self._draw_line(p1[0], p1[1], p2[0], p2[1])
+
+    def _generate_circle_star_pattern(self):
+        """生成星環晶體圖案（圓形 + 內部五角星）"""
+        center = self.GRID_SIZE // 2
+        radius = 10
 
         # 繪製圓形外框
         for y in range(self.GRID_SIZE):
@@ -333,207 +358,115 @@ class ExposureStage(Scene):
                     if self._is_in_wafer_grid(x, y):
                         self.target_grid[y][x] = True
 
-        # 基極線（左側水平線）
-        for x in range(center - radius - 6, center - radius + 1):
-            for y in range(center - 1, center + 2):
-                if self._is_in_wafer_grid(x, y):
-                    self.target_grid[y][x] = True
+        # 計算五角星頂點
+        star_radius = radius - 2
+        star_points = []
+        for i in range(5):
+            angle = math.radians(-90 + i * 72)
+            x = int(center + star_radius * math.cos(angle))
+            y = int(center + star_radius * math.sin(angle))
+            star_points.append((x, y))
 
-        # 基極垂直線（圓內）
-        base_x = center - radius // 2
-        for y in range(center - radius // 2, center + radius // 2 + 1):
-            for x in range(base_x - 1, base_x + 2):
-                if self._is_in_wafer_grid(x, y):
-                    self.target_grid[y][x] = True
+        # 繪製五角星
+        for i in range(5):
+            p1 = star_points[i]
+            p2 = star_points[(i + 2) % 5]
+            self._draw_line(p1[0], p1[1], p2[0], p2[1])
 
-        # 集電極線（右上斜線）
-        for i in range(10):
-            x = base_x + i
-            y = center - radius // 3 - i
-            for dx in range(-1, 2):
-                for dy in range(-1, 2):
-                    if self._is_in_wafer_grid(x + dx, y + dy):
-                        self.target_grid[y + dy][x + dx] = True
-
-        # 發射極線（右下斜線）
-        for i in range(10):
-            x = base_x + i
-            y = center + radius // 3 + i
-            for dx in range(-1, 2):
-                for dy in range(-1, 2):
-                    if self._is_in_wafer_grid(x + dx, y + dy):
-                        self.target_grid[y + dy][x + dx] = True
-
-    def _generate_capacitor_pattern(self):
-        """生成變壓器圖案（兩組線圈 + 鐵芯）"""
+    def _generate_oval_rect_pattern(self):
+        """生成矩晶結構圖案（橢圓形 + 內部長方形）"""
         center = self.GRID_SIZE // 2
-        coil_radius = 3
-        coil_count = 3
-        gap = 4
+        oval_a = 12  # 橫軸半徑
+        oval_b = 8   # 縱軸半徑
 
-        # 左側線圈（3 個半圓弧效果）
-        left_x = center - gap
-        for i in range(coil_count):
-            arc_y = center - (coil_count - 1) * coil_radius + i * 2 * coil_radius
-            # 繪製半圓（左凸）
-            for angle in range(90, 271):
-                rad = math.radians(angle)
-                x = int(left_x + coil_radius * math.cos(rad))
-                y = int(arc_y + coil_radius * math.sin(rad))
-                for dx in range(-1, 2):
-                    for dy in range(-1, 2):
-                        if self._is_in_wafer_grid(x + dx, y + dy):
-                            self.target_grid[y + dy][x + dx] = True
+        # 繪製橢圓形外框
+        for y in range(self.GRID_SIZE):
+            for x in range(self.GRID_SIZE):
+                dx = x - center
+                dy = y - center
+                # 橢圓方程式
+                val = (dx * dx) / (oval_a * oval_a) + (dy * dy) / (oval_b * oval_b)
+                if 0.85 <= val <= 1.15:
+                    if self._is_in_wafer_grid(x, y):
+                        self.target_grid[y][x] = True
 
-        # 右側線圈（3 個半圓弧效果）
-        right_x = center + gap
-        for i in range(coil_count):
-            arc_y = center - (coil_count - 1) * coil_radius + i * 2 * coil_radius
-            # 繪製半圓（右凸）
-            for angle in range(-90, 91):
-                rad = math.radians(angle)
-                x = int(right_x + coil_radius * math.cos(rad))
-                y = int(arc_y + coil_radius * math.sin(rad))
-                for dx in range(-1, 2):
-                    for dy in range(-1, 2):
-                        if self._is_in_wafer_grid(x + dx, y + dy):
-                            self.target_grid[y + dy][x + dx] = True
-
-        # 中間鐵芯（兩條平行線）
-        core_height = coil_count * 2 * coil_radius
-        for y in range(center - core_height // 2, center + core_height // 2 + 1):
-            for x in range(center - 1, center):
-                if self._is_in_wafer_grid(x, y):
-                    self.target_grid[y][x] = True
-            for x in range(center + 1, center + 2):
-                if self._is_in_wafer_grid(x, y):
-                    self.target_grid[y][x] = True
-
-    def _generate_ic_pattern(self):
-        """生成 IC 晶片圖案（矩形 + 引腳）"""
-        center = self.GRID_SIZE // 2
-        half_width = 2
-        rect_size = 8
-        pin_length = 4
-
-        # 矩形外框（四邊）
+        # 繪製內部長方形
+        rect_w = 8
+        rect_h = 5
         # 頂邊
-        for y in range(center - rect_size - half_width, center - rect_size + half_width + 1):
-            for x in range(center - rect_size, center + rect_size + 1):
+        for x in range(center - rect_w, center + rect_w + 1):
+            for y in range(center - rect_h - 1, center - rect_h + 2):
                 if self._is_in_wafer_grid(x, y):
                     self.target_grid[y][x] = True
         # 底邊
-        for y in range(center + rect_size - half_width, center + rect_size + half_width + 1):
-            for x in range(center - rect_size, center + rect_size + 1):
+        for x in range(center - rect_w, center + rect_w + 1):
+            for y in range(center + rect_h - 1, center + rect_h + 2):
                 if self._is_in_wafer_grid(x, y):
                     self.target_grid[y][x] = True
         # 左邊
-        for y in range(center - rect_size, center + rect_size + 1):
-            for x in range(center - rect_size - half_width, center - rect_size + half_width + 1):
+        for y in range(center - rect_h, center + rect_h + 1):
+            for x in range(center - rect_w - 1, center - rect_w + 2):
                 if self._is_in_wafer_grid(x, y):
                     self.target_grid[y][x] = True
         # 右邊
-        for y in range(center - rect_size, center + rect_size + 1):
-            for x in range(center + rect_size - half_width, center + rect_size + half_width + 1):
+        for y in range(center - rect_h, center + rect_h + 1):
+            for x in range(center + rect_w - 1, center + rect_w + 2):
                 if self._is_in_wafer_grid(x, y):
                     self.target_grid[y][x] = True
 
-        # 引腳（每邊 3 個）
-        pin_positions = [-5, 0, 5]
-        for offset in pin_positions:
-            # 頂部引腳
-            for y in range(center - rect_size - pin_length, center - rect_size):
-                for x in range(center + offset - 1, center + offset + 2):
-                    if self._is_in_wafer_grid(x, y):
-                        self.target_grid[y][x] = True
-            # 底部引腳
-            for y in range(center + rect_size + 1, center + rect_size + pin_length + 1):
-                for x in range(center + offset - 1, center + offset + 2):
-                    if self._is_in_wafer_grid(x, y):
-                        self.target_grid[y][x] = True
-            # 左側引腳
-            for y in range(center + offset - 1, center + offset + 2):
-                for x in range(center - rect_size - pin_length, center - rect_size):
-                    if self._is_in_wafer_grid(x, y):
-                        self.target_grid[y][x] = True
-            # 右側引腳
-            for y in range(center + offset - 1, center + offset + 2):
-                for x in range(center + rect_size + 1, center + rect_size + pin_length + 1):
-                    if self._is_in_wafer_grid(x, y):
-                        self.target_grid[y][x] = True
-
-    def _generate_opamp_pattern(self):
-        """生成比較器電路圖案（三角形 + 電源腳位 V+/V- + 輸入輸出線）"""
+    def _generate_pyramid_pattern(self):
+        """生成金字塔晶體圖案（3D 四角錐）"""
         center = self.GRID_SIZE // 2
-        # 加大尺寸以容納電源腳位
-        tri_height = 16
-        tri_width = 12
+        base_w = 12
+        base_h = 6
+        apex_offset = 8
 
-        # 三角形頂點座標
-        left_x = center - tri_width // 2
-        right_x = center + tri_width // 2
-        top_y = center - tri_height // 2
-        bottom_y = center + tri_height // 2
+        # 底部菱形的四個角
+        bottom_y = center + 3
+        left_point = (center - base_w, bottom_y)
+        right_point = (center + base_w, bottom_y)
+        front_point = (center, bottom_y + base_h)
+        back_point = (center, bottom_y - base_h)
 
-        # 1. 左邊垂直線
-        for y in range(top_y, bottom_y + 1):
-            for x in range(left_x - 1, left_x + 2):
-                if self._is_in_wafer_grid(x, y):
-                    self.target_grid[y][x] = True
+        # 頂點
+        apex = (center, center - apex_offset)
 
-        # 2. 上斜線（左上到右中）
-        for i in range(tri_width + 2):
-            x = left_x + i
-            y = top_y + (tri_height // 2) * i // tri_width
-            for dx in range(-1, 2):
-                for dy in range(-1, 2):
-                    if self._is_in_wafer_grid(x + dx, y + dy):
-                        self.target_grid[y + dy][x + dx] = True
+        # 繪製底部菱形
+        self._draw_line(left_point[0], left_point[1], front_point[0], front_point[1])
+        self._draw_line(front_point[0], front_point[1], right_point[0], right_point[1])
+        self._draw_line(right_point[0], right_point[1], back_point[0], back_point[1])
+        self._draw_line(back_point[0], back_point[1], left_point[0], left_point[1])
 
-        # 3. 下斜線（左下到右中）
-        for i in range(tri_width + 2):
-            x = left_x + i
-            y = bottom_y - (tri_height // 2) * i // tri_width
-            for dx in range(-1, 2):
-                for dy in range(-1, 2):
-                    if self._is_in_wafer_grid(x + dx, y + dy):
-                        self.target_grid[y + dy][x + dx] = True
+        # 繪製從頂點到底部四角的邊
+        self._draw_line(apex[0], apex[1], left_point[0], left_point[1])
+        self._draw_line(apex[0], apex[1], right_point[0], right_point[1])
+        self._draw_line(apex[0], apex[1], front_point[0], front_point[1])
+        self._draw_line(apex[0], apex[1], back_point[0], back_point[1])
 
-        # 4. V+ 電源線（三角形頂部中央向上延伸）
-        vplus_x = center
-        vplus_len = 5
-        for y in range(top_y - vplus_len, top_y + 1):
-            for x in range(vplus_x - 1, vplus_x + 2):
-                if self._is_in_wafer_grid(x, y):
-                    self.target_grid[y][x] = True
+    def _draw_line(self, x0: int, y0: int, x1: int, y1: int):
+        """在網格上繪製線段（Bresenham 算法）"""
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx - dy
 
-        # 5. V- 接地線（三角形底部中央向下延伸）
-        vminus_x = center
-        vminus_len = 5
-        for y in range(bottom_y, bottom_y + vminus_len + 1):
-            for x in range(vminus_x - 1, vminus_x + 2):
-                if self._is_in_wafer_grid(x, y):
-                    self.target_grid[y][x] = True
+        while True:
+            # 繪製粗線（3x3）
+            for ddx in range(-1, 2):
+                for ddy in range(-1, 2):
+                    if self._is_in_wafer_grid(x0 + ddx, y0 + ddy):
+                        self.target_grid[y0 + ddy][x0 + ddx] = True
 
-        # 6. + 輸入線（左側上方）
-        plus_y = center - tri_height // 4
-        for x in range(left_x - 6, left_x):
-            for y in range(plus_y - 1, plus_y + 2):
-                if self._is_in_wafer_grid(x, y):
-                    self.target_grid[y][x] = True
-
-        # 7. - 輸入線（左側下方）
-        minus_y = center + tri_height // 4
-        for x in range(left_x - 6, left_x):
-            for y in range(minus_y - 1, minus_y + 2):
-                if self._is_in_wafer_grid(x, y):
-                    self.target_grid[y][x] = True
-
-        # 8. 輸出線（右側）
-        for x in range(right_x, right_x + 6):
-            for y in range(center - 1, center + 2):
-                if self._is_in_wafer_grid(x, y):
-                    self.target_grid[y][x] = True
+            if x0 == x1 and y0 == y1:
+                break
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x0 += sx
+            if e2 < dx:
+                err += dx
+                y0 += sy
 
     def _is_in_wafer_grid(self, gx: int, gy: int) -> bool:
         """檢查網格座標是否在晶圓範圍內"""
@@ -568,12 +501,12 @@ class ExposureStage(Scene):
             gyro_magnitude = (data.gx ** 2 + data.gy ** 2 + data.gz ** 2) ** 0.5
             gyro_dps = gyro_magnitude / 16.4  # 轉換為 度/秒
 
-            # 死區：< 5 dps 視為完全穩定
-            if gyro_dps < 5:
+            # 死區：< 3 dps 視為完全穩定（調嚴）
+            if gyro_dps < 3:
                 raw_stability = 1.0
             else:
-                # 5-30 dps 線性映射到 1.0-0.0
-                raw_stability = max(0.0, 1.0 - (gyro_dps - 5) / 25)
+                # 3-20 dps 線性映射到 1.0-0.0（調嚴）
+                raw_stability = max(0.0, 1.0 - (gyro_dps - 3) / 17)
 
             # 使用移動平均平滑化（最近 5 個樣本）
             self._stability_history.append(raw_stability)
@@ -594,11 +527,11 @@ class ExposureStage(Scene):
         variance = sum((s - avg_stability) ** 2 for s in self.stability_samples) / len(self.stability_samples)
         std_dev = variance ** 0.5
 
-        # 基礎分數 = 平均穩定度 * 80
-        base_score = avg_stability * 80
+        # 基礎分數 = 平均穩定度 * 70（調嚴）
+        base_score = avg_stability * 70
 
-        # 一致性獎勵 = (1 - 標準差) * 20
-        consistency_bonus = max(0, (1 - std_dev)) * 20
+        # 一致性獎勵 = (1 - 標準差) * 30（提高一致性要求）
+        consistency_bonus = max(0, (1 - std_dev)) * 30
 
         total = int(base_score + consistency_bonus)
         return max(0, min(100, total))

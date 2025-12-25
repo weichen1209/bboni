@@ -12,37 +12,37 @@ from enum import Enum
 
 class ShapeType(Enum):
     """圖形類型枚舉"""
-    TRANSISTOR = "transistor"
-    CAPACITOR = "capacitor"
-    IC_CHIP = "ic"
-    OP_AMP = "opamp"
+    PENTAGON_STAR = "pentagon_star"   # 五邊形+五角星
+    CIRCLE_STAR = "circle_star"       # 圓形+五角星
+    OVAL_RECT = "oval_rect"           # 橢圓+長方形
+    PYRAMID = "pyramid"               # 金字塔
 
 
 # 圖形元資料（用於 UI 顯示）
 SHAPE_METADATA = {
-    ShapeType.TRANSISTOR: {
-        "name": "電晶體",
-        "display_name": "NPN 電晶體",
-        "description": "BJT 三極管符號",
-        "difficulty": 3,
+    ShapeType.PENTAGON_STAR: {
+        "name": "五角晶體",
+        "display_name": "五角晶體",
+        "description": "五邊形內含五角星",
+        "difficulty": 2,
     },
-    ShapeType.CAPACITOR: {
-        "name": "變壓器",
-        "display_name": "變壓器",
-        "description": "兩組線圈符號",
-        "difficulty": 3,
+    ShapeType.CIRCLE_STAR: {
+        "name": "星環晶體",
+        "display_name": "星環晶體",
+        "description": "圓形內含五角星",
+        "difficulty": 2,
     },
-    ShapeType.IC_CHIP: {
-        "name": "積體電路",
-        "display_name": "IC 晶片",
-        "description": "晶片封裝圖案",
-        "difficulty": 3,
+    ShapeType.OVAL_RECT: {
+        "name": "矩晶結構",
+        "display_name": "矩晶結構",
+        "description": "橢圓形內含長方形",
+        "difficulty": 1,
     },
-    ShapeType.OP_AMP: {
-        "name": "比較器",
-        "display_name": "比較器電路",
-        "description": "Comparator 電路符號（含 V+/V- 電源腳位）",
-        "difficulty": 3,
+    ShapeType.PYRAMID: {
+        "name": "金字塔",
+        "display_name": "金字塔晶體",
+        "description": "立體金字塔形狀",
+        "difficulty": 2,
     },
 }
 
@@ -357,229 +357,158 @@ class ShapeSimilarityScorer:
         self._target_image = img
         return img
 
-    def create_target_transistor_image(self, thickness: int = 12) -> np.ndarray:
+    def create_target_pentagon_star_image(self, thickness: int = 12) -> np.ndarray:
         """
-        建立 NPN 電晶體 (BJT) 目標圖像
-        圓形 + 基極線 + 集電極/發射極（帶箭頭）
+        建立五角晶體目標圖像（五邊形 + 內部五角星）
 
         Args:
             thickness: 線條粗細
 
         Returns:
-            NPN 電晶體形狀二值圖像
+            五角晶體形狀二值圖像
         """
+        import math
         w, h = self.canvas_size
         img = np.zeros((h, w), dtype=np.uint8)
 
         center_x, center_y = w // 2, h // 2
-        radius = min(w, h) // 4
+        radius = int(min(w, h) * 0.4)
+
+        # 計算五邊形頂點 (從頂部開始，順時針)
+        pentagon_points = []
+        for i in range(5):
+            angle = math.radians(-90 + i * 72)  # 從頂部開始
+            x = int(center_x + radius * math.cos(angle))
+            y = int(center_y + radius * math.sin(angle))
+            pentagon_points.append((x, y))
+
+        # 繪製五邊形外框
+        pts = np.array(pentagon_points, dtype=np.int32)
+        cv2.polylines(img, [pts], isClosed=True, color=255, thickness=thickness)
+
+        # 繪製內部五角星 (連接每隔一個頂點)
+        for i in range(5):
+            start = pentagon_points[i]
+            end = pentagon_points[(i + 2) % 5]
+            cv2.line(img, start, end, 255, thickness)
+
+        self._target_image = img
+        return img
+
+    def create_target_circle_star_image(self, thickness: int = 12) -> np.ndarray:
+        """
+        建立星環晶體目標圖像（圓形 + 內部五角星）
+
+        Args:
+            thickness: 線條粗細
+
+        Returns:
+            星環晶體形狀二值圖像
+        """
+        import math
+        w, h = self.canvas_size
+        img = np.zeros((h, w), dtype=np.uint8)
+
+        center_x, center_y = w // 2, h // 2
+        radius = int(min(w, h) * 0.4)
 
         # 繪製圓形外框
         cv2.circle(img, (center_x, center_y), radius, 255, thickness)
 
-        # 基極線（左側水平線進入圓）
-        base_x = center_x - radius
-        cv2.line(img, (base_x - radius, center_y), (base_x, center_y), 255, thickness)
+        # 計算五角星頂點 (內切於圓)
+        star_points = []
+        for i in range(5):
+            angle = math.radians(-90 + i * 72)  # 從頂部開始
+            x = int(center_x + radius * 0.9 * math.cos(angle))
+            y = int(center_y + radius * 0.9 * math.sin(angle))
+            star_points.append((x, y))
 
-        # 基極垂直線（圓內）
-        base_line_x = center_x - radius // 2
-        cv2.line(img, (base_line_x, center_y - radius // 2),
-                 (base_line_x, center_y + radius // 2), 255, thickness)
-
-        # 集電極線（右上斜線）
-        collector_start = (base_line_x, center_y - radius // 3)
-        collector_end = (center_x + radius, center_y - radius)
-        cv2.line(img, collector_start, collector_end, 255, thickness)
-
-        # 發射極線（右下斜線 + 箭頭）
-        emitter_start = (base_line_x, center_y + radius // 3)
-        emitter_end = (center_x + radius, center_y + radius)
-        cv2.line(img, emitter_start, emitter_end, 255, thickness)
-
-        # 箭頭（發射極方向）
-        arrow_len = radius // 3
-        arrow_angle = 0.5  # 箭頭角度
-        import math
-        dx = emitter_end[0] - emitter_start[0]
-        dy = emitter_end[1] - emitter_start[1]
-        angle = math.atan2(dy, dx)
-        # 箭頭兩側
-        arrow1 = (int(emitter_end[0] - arrow_len * math.cos(angle - arrow_angle)),
-                  int(emitter_end[1] - arrow_len * math.sin(angle - arrow_angle)))
-        arrow2 = (int(emitter_end[0] - arrow_len * math.cos(angle + arrow_angle)),
-                  int(emitter_end[1] - arrow_len * math.sin(angle + arrow_angle)))
-        cv2.line(img, emitter_end, arrow1, 255, thickness)
-        cv2.line(img, emitter_end, arrow2, 255, thickness)
+        # 繪製五角星 (連接每隔一個頂點)
+        for i in range(5):
+            start = star_points[i]
+            end = star_points[(i + 2) % 5]
+            cv2.line(img, start, end, 255, thickness)
 
         self._target_image = img
         return img
 
-    def create_target_capacitor_image(self, thickness: int = 12) -> np.ndarray:
+    def create_target_oval_rect_image(self, thickness: int = 12) -> np.ndarray:
         """
-        建立變壓器目標圖像
-        兩組線圈（半圓弧）+ 中間雙線
+        建立矩晶結構目標圖像（橢圓形 + 內部長方形）
 
         Args:
             thickness: 線條粗細
 
         Returns:
-            變壓器形狀二值圖像
+            矩晶結構形狀二值圖像
         """
         w, h = self.canvas_size
         img = np.zeros((h, w), dtype=np.uint8)
 
         center_x, center_y = w // 2, h // 2
-        coil_radius = min(w, h) // 10
-        coil_count = 3  # 每側線圈數量
-        gap = min(w, h) // 8  # 兩側線圈間距
 
-        # 左側線圈（3 個半圓弧，向左凸起）
-        left_x = center_x - gap
-        for i in range(coil_count):
-            arc_y = center_y - (coil_count - 1) * coil_radius + i * 2 * coil_radius
-            cv2.ellipse(img, (left_x, arc_y), (coil_radius, coil_radius),
-                       0, 90, 270, 255, thickness)
+        # 橢圓尺寸
+        oval_a = int(w * 0.4)  # 橫軸半徑
+        oval_b = int(h * 0.35)  # 縱軸半徑
 
-        # 右側線圈（3 個半圓弧，向右凸起）
-        right_x = center_x + gap
-        for i in range(coil_count):
-            arc_y = center_y - (coil_count - 1) * coil_radius + i * 2 * coil_radius
-            cv2.ellipse(img, (right_x, arc_y), (coil_radius, coil_radius),
-                       0, -90, 90, 255, thickness)
+        # 繪製橢圓形外框
+        cv2.ellipse(img, (center_x, center_y), (oval_a, oval_b), 0, 0, 360, 255, thickness)
 
-        # 中間兩條平行線（鐵芯）
-        core_height = coil_count * 2 * coil_radius
-        core_top = center_y - core_height // 2
-        core_bottom = center_y + core_height // 2
-        line_gap = gap // 3
-        cv2.line(img, (center_x - line_gap // 2, core_top),
-                 (center_x - line_gap // 2, core_bottom), 255, thickness)
-        cv2.line(img, (center_x + line_gap // 2, core_top),
-                 (center_x + line_gap // 2, core_bottom), 255, thickness)
+        # 內部長方形尺寸 (稍微內縮)
+        rect_w = int(oval_a * 1.2)
+        rect_h = int(oval_b * 1.0)
 
-        # 左側引線
-        cv2.line(img, (left_x - coil_radius - w // 8, center_y - core_height // 3),
-                 (left_x - coil_radius, center_y - core_height // 3), 255, thickness)
-        cv2.line(img, (left_x - coil_radius - w // 8, center_y + core_height // 3),
-                 (left_x - coil_radius, center_y + core_height // 3), 255, thickness)
-
-        # 右側引線
-        cv2.line(img, (right_x + coil_radius, center_y - core_height // 3),
-                 (right_x + coil_radius + w // 8, center_y - core_height // 3), 255, thickness)
-        cv2.line(img, (right_x + coil_radius, center_y + core_height // 3),
-                 (right_x + coil_radius + w // 8, center_y + core_height // 3), 255, thickness)
-
-        self._target_image = img
-        return img
-
-    def create_target_ic_image(self, thickness: int = 10) -> np.ndarray:
-        """
-        建立 IC 晶片（矩形 + 引腳）目標圖像
-        矩形外框 + 四邊各 3 個引腳
-
-        Args:
-            thickness: 線條粗細
-
-        Returns:
-            IC 晶片形狀二值圖像
-        """
-        w, h = self.canvas_size
-        img = np.zeros((h, w), dtype=np.uint8)
-
-        margin = min(w, h) // 5
-        pin_length = min(w, h) // 10
-
-        # 主體矩形邊界
-        rect_left = margin + pin_length
-        rect_right = w - margin - pin_length
-        rect_top = margin + pin_length
-        rect_bottom = h - margin - pin_length
-
-        # 繪製矩形外框
+        # 繪製內部長方形
+        rect_left = center_x - rect_w // 2
+        rect_top = center_y - rect_h // 2
+        rect_right = center_x + rect_w // 2
+        rect_bottom = center_y + rect_h // 2
         cv2.rectangle(img, (rect_left, rect_top), (rect_right, rect_bottom), 255, thickness)
 
-        # 每邊 3 個引腳
-        num_pins = 3
-
-        # 頂部引腳
-        for i in range(num_pins):
-            pin_x = rect_left + (rect_right - rect_left) * (i + 1) // (num_pins + 1)
-            cv2.line(img, (pin_x, rect_top - pin_length), (pin_x, rect_top), 255, thickness)
-
-        # 底部引腳
-        for i in range(num_pins):
-            pin_x = rect_left + (rect_right - rect_left) * (i + 1) // (num_pins + 1)
-            cv2.line(img, (pin_x, rect_bottom), (pin_x, rect_bottom + pin_length), 255, thickness)
-
-        # 左側引腳
-        for i in range(num_pins):
-            pin_y = rect_top + (rect_bottom - rect_top) * (i + 1) // (num_pins + 1)
-            cv2.line(img, (rect_left - pin_length, pin_y), (rect_left, pin_y), 255, thickness)
-
-        # 右側引腳
-        for i in range(num_pins):
-            pin_y = rect_top + (rect_bottom - rect_top) * (i + 1) // (num_pins + 1)
-            cv2.line(img, (rect_right, pin_y), (rect_right + pin_length, pin_y), 255, thickness)
-
         self._target_image = img
         return img
 
-    def create_target_opamp_image(self, thickness: int = 12) -> np.ndarray:
+    def create_target_pyramid_image(self, thickness: int = 12) -> np.ndarray:
         """
-        建立比較器電路目標圖像
-        三角形 + 電源腳位 V+/V- + 輸入/輸出線
+        建立金字塔晶體目標圖像（3D 四角錐）
 
         Args:
             thickness: 線條粗細
 
         Returns:
-            比較器電路形狀二值圖像
+            金字塔晶體形狀二值圖像
         """
         w, h = self.canvas_size
         img = np.zeros((h, w), dtype=np.uint8)
 
         center_x, center_y = w // 2, h // 2
-        # 稍微縮小三角形高度以容納電源腳位
-        tri_height = int(min(w, h) * 0.45)
-        tri_width = int(tri_height * 0.75)
 
-        # 三角形頂點（指向右邊）
-        left_x = center_x - tri_width // 2
-        right_x = center_x + tri_width // 2
-        top_y = center_y - tri_height // 2
-        bottom_y = center_y + tri_height // 2
+        # 金字塔尺寸
+        base_w = int(w * 0.6)
+        base_h = int(h * 0.3)
+        apex_offset_y = int(h * 0.35)  # 頂點向上偏移
 
-        # 繪製三角形（左邊垂直線 + 上下斜線到右頂點）
-        # 左邊垂直線
-        cv2.line(img, (left_x, top_y), (left_x, bottom_y), 255, thickness)
-        # 上斜線
-        cv2.line(img, (left_x, top_y), (right_x, center_y), 255, thickness)
-        # 下斜線
-        cv2.line(img, (left_x, bottom_y), (right_x, center_y), 255, thickness)
+        # 底部菱形的四個角 (透視效果)
+        bottom_center_y = center_y + int(h * 0.15)
+        left_point = (center_x - base_w // 2, bottom_center_y)
+        right_point = (center_x + base_w // 2, bottom_center_y)
+        front_point = (center_x, bottom_center_y + base_h // 2)
+        back_point = (center_x, bottom_center_y - base_h // 2)
 
-        # 電源腳位
-        power_len = tri_height // 4
+        # 頂點
+        apex = (center_x, center_y - apex_offset_y)
 
-        # V+ 電源線（三角形頂部中央向上延伸）
-        vplus_x = center_x
-        cv2.line(img, (vplus_x, top_y), (vplus_x, top_y - power_len), 255, thickness)
+        # 繪製底部菱形
+        cv2.line(img, left_point, front_point, 255, thickness)
+        cv2.line(img, front_point, right_point, 255, thickness)
+        cv2.line(img, right_point, back_point, 255, thickness)
+        cv2.line(img, back_point, left_point, 255, thickness)
 
-        # V- 接地線（三角形底部中央向下延伸）
-        vminus_x = center_x
-        cv2.line(img, (vminus_x, bottom_y), (vminus_x, bottom_y + power_len), 255, thickness)
-
-        # 輸入線（+ 和 - 端）
-        input_len = tri_width // 3
-        plus_y = center_y - tri_height // 4
-        minus_y = center_y + tri_height // 4
-
-        # + 輸入線
-        cv2.line(img, (left_x - input_len, plus_y), (left_x, plus_y), 255, thickness)
-        # - 輸入線
-        cv2.line(img, (left_x - input_len, minus_y), (left_x, minus_y), 255, thickness)
-
-        # 輸出線
-        cv2.line(img, (right_x, center_y), (right_x + input_len, center_y), 255, thickness)
+        # 繪製從頂點到底部四角的邊
+        cv2.line(img, apex, left_point, 255, thickness)
+        cv2.line(img, apex, right_point, 255, thickness)
+        cv2.line(img, apex, front_point, 255, thickness)
+        cv2.line(img, apex, back_point, 255, thickness)
 
         self._target_image = img
         return img
@@ -595,17 +524,17 @@ class ShapeSimilarityScorer:
         Returns:
             目標形狀二值圖像
         """
-        if shape_type == ShapeType.TRANSISTOR:
-            return self.create_target_transistor_image(thickness)
-        elif shape_type == ShapeType.CAPACITOR:
-            return self.create_target_capacitor_image(thickness)
-        elif shape_type == ShapeType.IC_CHIP:
-            return self.create_target_ic_image(thickness)
-        elif shape_type == ShapeType.OP_AMP:
-            return self.create_target_opamp_image(thickness)
+        if shape_type == ShapeType.PENTAGON_STAR:
+            return self.create_target_pentagon_star_image(thickness)
+        elif shape_type == ShapeType.CIRCLE_STAR:
+            return self.create_target_circle_star_image(thickness)
+        elif shape_type == ShapeType.OVAL_RECT:
+            return self.create_target_oval_rect_image(thickness)
+        elif shape_type == ShapeType.PYRAMID:
+            return self.create_target_pyramid_image(thickness)
         else:
-            # 預設返回 H 形
-            return self.create_target_h_image(thickness)
+            # 預設返回五角晶體
+            return self.create_target_pentagon_star_image(thickness)
 
     def get_thumbnail(
         self, shape_type: ShapeType, size: Tuple[int, int] = (160, 120)

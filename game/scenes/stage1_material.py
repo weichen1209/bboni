@@ -25,7 +25,7 @@ class MaterialStage(Scene):
     ENERGY_SPEED = 0.4          # 能量累積速度
     MIN_SHAKE_THRESHOLD = 0.1   # 有效搖晃最低門檻
     SAMPLE_WINDOW = 50          # 均勻度計算樣本數
-    VARIANCE_PENALTY = 200      # 變異度扣分係數
+    VARIANCE_PENALTY = 300      # 變異度扣分係數（更嚴格）
 
     def __init__(self, game):
         super().__init__(game)
